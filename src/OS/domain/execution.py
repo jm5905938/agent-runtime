@@ -11,7 +11,6 @@ class ExecutionStatus(Enum):
 
     PENDING = "pending"
     RUNNING = "running"
-    WAITING = "waiting"
     COMPLETED = "completed"
     FAILED = "failed"
 

@@ -9,7 +9,7 @@ authors = [
 dependencies = []
 
 [project.scripts]
-agent-runtime = "agent_runtime:main"
+agent-runtime = "OS.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

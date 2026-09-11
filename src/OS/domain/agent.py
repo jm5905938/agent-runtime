@@ -11,6 +11,7 @@ class AgentStatus(Enum):
     CREATED = "created"
     ACTIVE = "active"
     PAUSED = "paused"
+    TERMINATING = "terminating"
     TERMINATED = "terminated"
 
 
