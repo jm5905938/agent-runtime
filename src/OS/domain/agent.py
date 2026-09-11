@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 from uuid import UUID, uuid4
 
 
@@ -24,4 +25,4 @@ class AgentInstance:
     name: str
     id: UUID = field(default_factory=uuid4)
     status: AgentStatus = AgentStatus.CREATED
-    state: dict = field(default_factory=dict)
+    state: dict[str,Any] = field(default_factory=dict)
