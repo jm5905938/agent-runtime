@@ -1,9 +1,9 @@
 from OS.runtime.agent import ExecutionContext, ExecutionResult
 
 
-class CouterAgent:
+class CounterAgent:
     """
-    数数agent
+    数数 Agent。
     """
 
     async def run(self, context: ExecutionContext) -> ExecutionResult:
