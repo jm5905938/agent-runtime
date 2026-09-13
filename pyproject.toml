@@ -1,0 +1,16 @@
+[project]
+name = "agent-runtime"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "jm5905938", email = "jm5905938@gmail.com" }
+]
+dependencies = []
+
+[project.scripts]
+agent-runtime = "OS.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
