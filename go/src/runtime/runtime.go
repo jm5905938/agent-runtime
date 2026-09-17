@@ -150,11 +150,13 @@ func (r *Runtime) RunUntilIdle() error {
 		r.mu.Lock()
 		if len(r.pending) > 0 {
 			item := r.pending[0]
-			r.pending = r.pending[1:]
 			r.mu.Unlock()
 			if _, err := r.Process(item.agentID, item.event); err != nil {
 				return err
 			}
+			r.mu.Lock()
+			r.pending = r.pending[1:]
+			r.mu.Unlock()
 			continue
 		}
 		if len(r.pendingActions) == 0 {
@@ -162,7 +164,6 @@ func (r *Runtime) RunUntilIdle() error {
 			return nil
 		}
 		item := r.pendingActions[0]
-		r.pendingActions = r.pendingActions[1:]
 		agent, err := r.registry.Get(item.agentID)
 		r.mu.Unlock()
 		if err != nil {
@@ -178,6 +179,9 @@ func (r *Runtime) RunUntilIdle() error {
 		if err := r.Submit(item.agentID, event); err != nil {
 			return err
 		}
+		r.mu.Lock()
+		r.pendingActions = r.pendingActions[1:]
+		r.mu.Unlock()
 	}
 }
 
