@@ -4,10 +4,17 @@
 package runtime
 
 import "agent-runtime/domain"
+//防止修改原agent
+type AgentSnapshot struct {
+	ID    domain.ID
+	Name  string
+	Status domain.AgentStatus
+	State map[string]any
+}
 
 // ExecutionContext 是 Agent 处理一条事件时能看到的输入。
 type ExecutionContext struct {
-	Agent *domain.AgentInstance
+	Agent AgentSnapshot
 	Event domain.Event
 }
 

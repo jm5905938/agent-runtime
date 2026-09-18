@@ -40,27 +40,53 @@ func NewRuntime() *Runtime {
 func (r *Runtime) Executor() *Executor { return r.executor }
 
 // Register 保存 Agent 和它的业务实现。新 Agent 会自动从 created 进入 active。
-func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) error {
+func (r *Runtime) Register(
+	agent *domain.AgentInstance,
+	runner AgentRunner,
+) error {
 	if runner == nil {
 		return fmt.Errorf("注册 Agent: runner 不能为空")
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	if err := r.registry.Register(agent); err != nil {
 		return err
 	}
+
+	stored, err := r.registry.getMutable(agent.ID)
+	if err != nil {
+		return err
+	}
+
 	r.runners[agent.ID] = runner
 	r.agentLocks[agent.ID] = &sync.Mutex{}
-	if agent.Status == domain.AgentStatusCreated {
-		return r.lifecycle.Transition(agent, domain.AgentStatusActive)
+
+	if stored.Status == domain.AgentStatusCreated {
+		if err := r.lifecycle.Transition(
+			stored,
+			domain.AgentStatusActive,
+		); err != nil {
+			return err
+		}
 	}
+
 	return nil
 }
+// Agent只读快照
+func (r *Runtime) Agent(
+	agentID domain.ID,
+) (AgentSnapshot, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
+	return r.registry.Get(agentID)
+}
 // Process 立即处理一条事件。同一个 Agent 的 Process 调用会串行执行。
 func (r *Runtime) Process(agentID domain.ID, event domain.Event) (ExecutionResult, error) {
 	r.mu.Lock()
-	agent, err := r.registry.Get(agentID)
+	agent, err := r.registry.getMutable(agentID)
 	runner, lock := r.runners[agentID], r.agentLocks[agentID]
 	r.mu.Unlock()
 	if err != nil {
@@ -98,7 +124,12 @@ func (r *Runtime) processLocked(agent *domain.AgentInstance, runner AgentRunner,
 		r.executions[execution.ID] = execution
 		r.mu.Unlock()
 	}()
-	result, err = runner.Run(ExecutionContext{Agent: agent, Event: event})
+	result, err = runner.Run(ExecutionContext{Agent: AgentSnapshot{
+		ID: agent.ID,
+		Name: agent.Name,
+		Status: agent.Status,
+		State: cloneMap(agent.State)}, Event: cloneEvent(event)})
+
 	if err != nil {
 		return ExecutionResult{}, err
 	}
@@ -138,7 +169,7 @@ func (r *Runtime) Submit(agentID domain.ID, event domain.Event) error {
 	if _, err := r.registry.Get(agentID); err != nil {
 		return err
 	}
-	r.pending = append(r.pending, pendingEvent{agentID, event})
+	r.pending = append(r.pending, pendingEvent{agentID, cloneEvent(event)})
 	return nil
 }
 
@@ -207,25 +238,3 @@ func (r *Runtime) Actions() map[domain.ID]domain.Action {
 	return result
 }
 
-func copyMap(source map[string]any) map[string]any {
-	if source == nil {
-		return nil
-	}
-	result := make(map[string]any, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
-}
-
-func cloneActions(source []domain.Action) []domain.Action {
-	result := make([]domain.Action, len(source))
-	for i, action := range source {
-		result[i] = action
-		result[i].Payload = copyMap(action.Payload)
-		if action.ExecutionID != nil {
-			result[i].BindExecution(*action.ExecutionID)
-		}
-	}
-	return result
-}

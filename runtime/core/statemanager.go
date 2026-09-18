@@ -11,6 +11,6 @@ func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) {
 		agent.State = make(map[string]any)
 	}
 	for key, value := range result.StateUpdate {
-		agent.State[key] = value
+		agent.State[key] = cloneValue(value)
 	}
 }

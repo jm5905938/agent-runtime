@@ -15,7 +15,7 @@ type ActionHandler interface {
 type EchoHandler struct{}
 
 func (EchoHandler) Execute(action domain.Action) (map[string]any, error) {
-	return copyMap(action.Payload), nil
+	return cloneMap(action.Payload), nil
 }
 
 // Executor 执行 Action，并把结果包装为 action.result Event。
