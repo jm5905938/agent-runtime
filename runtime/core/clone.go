@@ -1,6 +1,9 @@
-package runtime
+package core
 
-import "agent-runtime/domain"
+import (
+	"agent-runtime/domain"
+	"time"
+)
 
 func cloneValue(value any) any {
 	switch value := value.(type) {
@@ -8,6 +11,9 @@ func cloneValue(value any) any {
 		return cloneMap(value)
 
 	case []any:
+		if value == nil {
+			return []any(nil)
+		}
 		result := make([]any, len(value))
 		for i, item := range value {
 			result[i] = cloneValue(item)
@@ -37,6 +43,9 @@ func cloneEvent(event domain.Event) domain.Event {
 }
 
 func cloneActions(source []domain.Action) []domain.Action {
+	if source == nil {
+		return nil
+	}
 	result := make([]domain.Action, len(source))
 
 	for i, action := range source {
@@ -51,6 +60,28 @@ func cloneActions(source []domain.Action) []domain.Action {
 	return result
 }
 func cloneAgent(agent domain.AgentInstance) domain.AgentInstance {
-    agent.State = cloneMap(agent.State)
-    return agent
+	agent.State = cloneMap(agent.State)
+	return agent
+}
+
+func cloneResult(result ExecutionResult) ExecutionResult {
+	return ExecutionResult{StateUpdate: cloneMap(result.StateUpdate), Actions: cloneActions(result.Actions)}
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneExecution(execution domain.Execution) domain.Execution {
+	execution.StartedAt = cloneTime(execution.StartedAt)
+	execution.FinishedAt = cloneTime(execution.FinishedAt)
+	if execution.Result != nil {
+		result := cloneResult(*execution.Result)
+		execution.Result = &result
+	}
+	return execution
 }

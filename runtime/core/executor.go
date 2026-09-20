@@ -1,6 +1,7 @@
-package runtime
+package core
 
 import (
+	"agent-runtime/codec"
 	"agent-runtime/domain"
 	"fmt"
 	"sync"
@@ -24,11 +25,11 @@ type Executor struct {
 	mu       sync.Mutex
 	handlers map[string]ActionHandler
 	results  map[domain.ID]domain.Event
-	statuses map[domain.ID]string
+	statuses map[domain.ID]domain.ActionStatus
 }
 
 func NewExecutor() *Executor {
-	return &Executor{handlers: make(map[string]ActionHandler), results: make(map[domain.ID]domain.Event), statuses: make(map[domain.ID]string)}
+	return &Executor{handlers: make(map[string]ActionHandler), results: make(map[domain.ID]domain.Event), statuses: make(map[domain.ID]domain.ActionStatus)}
 }
 
 func (e *Executor) Register(actionType string, handler ActionHandler) error {
@@ -45,15 +46,18 @@ func (e *Executor) Register(actionType string, handler ActionHandler) error {
 }
 
 func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
+	if err := validateResult(ExecutionResult{Actions: []domain.Action{action}}); err != nil {
+		return domain.Event{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if event, exists := e.results[action.ID]; exists {
-		return event, nil
+		return cloneEvent(event), nil
 	}
-	if e.statuses[action.ID] == "unknown" {
+	if e.statuses[action.ID] == domain.ActionStatusUnknown {
 		return domain.Event{}, fmt.Errorf("Action %s 的结果未知，需要确认后处理", action.ID)
 	}
-	e.statuses[action.ID] = "running"
+	e.statuses[action.ID] = domain.ActionStatusRunning
 	payload := map[string]any{"action_id": string(action.ID), "action_type": action.Type, "execution_id": ""}
 	if action.ExecutionID != nil {
 		payload["execution_id"] = string(*action.ExecutionID)
@@ -62,15 +66,19 @@ func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
 	if !exists {
 		payload["status"] = "failed"
 		payload["error"] = fmt.Sprintf("未注册 Action 类型 %s", action.Type)
-	} else if result, err := handler.Execute(action); err != nil {
+	} else if result, err := handler.Execute(cloneActions([]domain.Action{action})[0]); err != nil {
 		payload["status"] = "failed"
-		payload["error"] = fmt.Sprintf("%T: %v", err, err)
+		payload["error"] = recordText(fmt.Sprintf("%T: %v", err, err))
 	} else {
+		if err := codec.ValidateData(result); err != nil {
+			e.statuses[action.ID] = domain.ActionStatusUnknown
+			return domain.Event{}, fmt.Errorf("Action %s 返回不支持的业务数据，结果未知: %w", action.ID, err)
+		}
 		payload["status"] = "succeeded"
-		payload["result"] = result
+		payload["result"] = cloneMap(result)
 	}
 	event := domain.NewEvent("action.result", payload)
 	e.results[action.ID] = event
-	e.statuses[action.ID] = payload["status"].(string)
-	return event, nil
+	e.statuses[action.ID] = domain.ActionStatus(payload["status"].(string))
+	return cloneEvent(event), nil
 }

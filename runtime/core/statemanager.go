@@ -1,16 +1,55 @@
-package runtime
+package core
 
-import "agent-runtime/domain"
+import (
+	"agent-runtime/codec"
+	"agent-runtime/domain"
+	"fmt"
+	"math"
+)
 
 // StateManager 统一将 Agent 返回的状态增量写回 Agent。
 // 当前是内存实现；以后可在这里替换为带事务的数据库提交。
 type StateManager struct{}
 
-func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) {
-	if agent.State == nil {
-		agent.State = make(map[string]any)
+func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) error {
+	if agent == nil {
+		return fmt.Errorf("提交状态: Agent 不能为空")
+	}
+	if _, err := codec.Encode(agent); err != nil {
+		return fmt.Errorf("原Agent记录: %w", err)
+	}
+	if err := validateResult(result); err != nil {
+		return err
+	}
+	if agent.StateVersion == math.MaxUint64 {
+		return fmt.Errorf("提交状态: 状态版本已耗尽")
+	}
+	state := cloneMap(agent.State)
+	if state == nil {
+		state = make(map[string]any)
 	}
 	for key, value := range result.StateUpdate {
-		agent.State[key] = cloneValue(value)
+		state[key] = cloneValue(value)
 	}
+	agent.State = state
+	agent.StateVersion++
+	return nil
+}
+
+func validateResult(result ExecutionResult) error {
+	if err := codec.ValidateData(result.StateUpdate); err != nil {
+		return fmt.Errorf("状态更新: %w", err)
+	}
+	for _, action := range result.Actions {
+		if action.ID == "" || action.Type == "" {
+			return fmt.Errorf("Action id/type 不能为空")
+		}
+		if err := codec.ValidateData(action.Payload); err != nil {
+			return fmt.Errorf("Action %s 输入: %w", action.ID, err)
+		}
+	}
+	if _, err := codec.Encode(result); err != nil {
+		return fmt.Errorf("执行结果记录: %w", err)
+	}
+	return nil
 }

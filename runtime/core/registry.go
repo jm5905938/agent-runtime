@@ -1,6 +1,7 @@
-package runtime
+package core
 
 import (
+	"agent-runtime/codec"
 	"agent-runtime/domain"
 	"fmt"
 )
@@ -18,6 +19,12 @@ func NewAgentRegistry() *AgentRegistry {
 func (r *AgentRegistry) Register(agent *domain.AgentInstance) error {
 	if agent == nil {
 		return fmt.Errorf("注册 Agent: Agent 不能为空")
+	}
+	if agent.ID == "" {
+		return fmt.Errorf("注册 Agent: id 不能为空")
+	}
+	if _, err := codec.Encode(agent); err != nil {
+		return fmt.Errorf("注册 Agent 记录: %w", err)
 	}
 
 	if _, exists := r.agents[agent.ID]; exists {
@@ -53,12 +60,12 @@ func (r *AgentRegistry) Get(
 		return AgentSnapshot{}, err
 	}
 
-	return AgentSnapshot{
-		ID:     agent.ID,
-		Name:   agent.Name,
-		Status: agent.Status,
-		State:  cloneMap(agent.State),
-	}, nil
+	return snapshotAgent(*agent), nil
+}
+
+func snapshotAgent(agent domain.AgentInstance) AgentSnapshot {
+	return AgentSnapshot{ID: agent.ID, Name: agent.Name, Definition: agent.Definition,
+		Status: agent.Status, State: cloneMap(agent.State), StateVersion: agent.StateVersion}
 }
 
 func (r *AgentRegistry) Remove(agentID domain.ID) error {
