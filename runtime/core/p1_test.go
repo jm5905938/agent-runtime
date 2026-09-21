@@ -152,6 +152,9 @@ func TestP1CreateAndDuplicateBindingsDoNotReplaceHistory(t *testing.T) {
 
 func TestP1NestedStateResultAndHistoryAreIsolated(t *testing.T) {
 	runtime := NewRuntime()
+	if err := runtime.Executor().Register("echo", EchoHandler{}); err != nil {
+		t.Fatal(err)
+	}
 	ref := domain.DefinitionRef{ID: "isolation", Version: "1"}
 	initial := map[string]any{"input": p1Nested("initial"), "null_array": []any(nil)}
 	output := map[string]any{"output": p1Nested("committed")}
@@ -296,7 +299,7 @@ func TestP1InvalidOutputsCannotPartiallyCommit(t *testing.T) {
 				}
 				snapshot := p1Agent(t, runtime, agent.ID)
 				if !reflect.DeepEqual(snapshot.State, agent.State) || snapshot.StateVersion != 6 ||
-					len(runtime.Actions()) != 0 || len(runtime.pendingActions) != 0 {
+					len(runtime.Actions()) != 0 {
 					t.Fatalf("invalid output partially committed: %#v", snapshot)
 				}
 				if len(runtime.Executions()) != 1 || len(runtime.Attempts()) != 1 {

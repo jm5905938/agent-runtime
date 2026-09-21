@@ -135,13 +135,13 @@ func TestCyclesRejectedAndSharedValuesAllowed(t *testing.T) {
 	if _, err := codec.Encode([]*node{sharedNode, sharedNode}); err != nil {
 		t.Fatalf("shared pointer is not a cycle: %v", err)
 	}
-	// 同一底层数组的空切片不引用元素，不能误报为循环。
+	//空切片不引用元素，不算循环
 	emptyPrefix := make([]any, 1)
 	emptyPrefix[0] = emptyPrefix[:0]
 	if _, err := codec.Encode(emptyPrefix); err != nil {
 		t.Fatalf("empty prefix is not a cycle: %v", err)
 	}
-	// 首个字段的地址可以等于外层结构体地址，但两种指针没有形成循环。
+	//首字段与结构体同址，不算循环
 	type inner struct{ N int }
 	type outer struct {
 		First     inner
@@ -246,7 +246,7 @@ func TestInvalidUTCTimeRejectedWithoutChangingDestination(t *testing.T) {
 	}
 	original := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	got := original
-	// 本地年份虽然合法，归一化 UTC 后已经超出 JSON 时间范围。
+	//本地年份合法，转utc后越界
 	if err := codec.Decode([]byte(`"0000-01-01T00:00:00+08:00"`), &got); err == nil {
 		t.Fatal("time outside UTC encoding range accepted")
 	}

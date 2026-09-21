@@ -73,7 +73,7 @@ func TestRunUntilIdleProcessesActionResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 从 Runtime 获取内部 Agent 状态
+	//读取agent快照
 	snapshot, err := runtime.Agent(agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestRegisteredAgentIsIsolatedFromCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 修改外部持有的 Agent
+	//修改外部agent
 	agent.State["count"] = 999
 
 	snapshot, err := runtime.Agent(agent.ID)
@@ -207,7 +207,7 @@ func TestRunnerCannotMutatePersistentAgentState(t *testing.T) {
 				error,
 			) {
 
-				// 尝试修改 Execution Snapshot
+				//尝试修改执行快照
 				ctx.Agent.State["count"] = 999
 
 				return ExecutionResult{}, nil
