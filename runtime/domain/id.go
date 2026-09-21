@@ -5,8 +5,7 @@ import (
 	"fmt"
 )
 
-// ID 是每个对象的唯一编号。
-// 用字符串保存，写入 JSON、日志或数据库都很方便。
+//字符串形式的唯一id
 type ID string
 
 func NewID() (ID, error) {

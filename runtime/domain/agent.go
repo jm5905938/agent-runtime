@@ -20,7 +20,7 @@ func (d DefinitionRef) Validate() error {
 	return nil
 }
 
-// AgentStatus描述Agent本身
+//agent生命周期状态
 
 type AgentStatus string
 
@@ -32,9 +32,7 @@ const (
 	AgentStatusTerminated  AgentStatus = "terminated"
 )
 
-// AgentInstance 就是一个 Agent。
-// 它有自己的编号、名字、当前状态和记忆（State）。
-// 不同 Agent 可以在 State 中保存不同的数据。
+//agent实例及其状态
 type AgentInstance struct {
 	ID           ID             `json:"id"`
 	Name         string         `json:"name"`
@@ -44,8 +42,7 @@ type AgentInstance struct {
 	StateVersion uint64         `json:"state_version"`
 }
 
-// NewAgentInstance 创建一个新的 Agent。
-// 新 Agent 一开始是 Created，注册成功后通常会变成 Active。
+//创建agent，初始状态为created
 func NewAgentInstance(name string) AgentInstance {
 	return AgentInstance{
 		ID:     mustNewID(),

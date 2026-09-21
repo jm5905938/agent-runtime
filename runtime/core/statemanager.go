@@ -7,8 +7,7 @@ import (
 	"math"
 )
 
-// StateManager 统一将 Agent 返回的状态增量写回 Agent。
-// 当前是内存实现；以后可在这里替换为带事务的数据库提交。
+//校验并合并状态增量
 type StateManager struct{}
 
 func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) error {

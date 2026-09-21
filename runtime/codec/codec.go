@@ -1,4 +1,4 @@
-// 固定持久化边界
+//固定持久化边界
 package codec
 
 import (
@@ -23,7 +23,7 @@ var (
 	}
 )
 
-// visit只记录当前递归路径，允许多个字段共享同一个非循环对象
+//只检查当前路径，允许共享非循环对象
 type visit struct {
 	kind   reflect.Kind
 	typ    reflect.Type
@@ -31,7 +31,7 @@ type visit struct {
 	length int
 }
 
-// ValidateData 检查 State、Payload等能否表达为 JSON。
+//检查业务数据能否编码为json
 func ValidateData(value any) error {
 	return validateData(value, "$", make(map[visit]bool))
 }
@@ -97,7 +97,7 @@ func validateData(value any, path string, active map[visit]bool) error {
 	return nil
 }
 
-// encode时间为UTC
+//时间统一为utc
 func Encode(value any) ([]byte, error) {
 	if value == nil {
 		return []byte("null"), nil
@@ -149,7 +149,7 @@ func Decode(data []byte, dst any) error {
 	return nil
 }
 
-// validateType在编解码前拒绝自定义钩子(time.Time除外)
+//拒绝自定义编解码钩子，time.Time除外
 func validateType(t reflect.Type, seen map[reflect.Type]bool) error {
 	if t == timeType || t == reflect.PointerTo(timeType) || t == numberType {
 		return nil

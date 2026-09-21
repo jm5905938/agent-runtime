@@ -1,6 +1,4 @@
-// Package core 实现 Agent 运行时的内存版本。
-//
-// 这个包负责“怎么运行”，domain 包负责“运行时有哪些数据”。
+//core负责运行流程，domain定义数据
 package core
 
 import "agent-runtime/domain"
@@ -16,7 +14,7 @@ type AgentSnapshot struct {
 	BindingError string               `json:"binding_error,omitempty"`
 }
 
-// ExecutionContext 是 Agent 处理一条事件时能看到的输入。
+//本轮执行的输入
 type ExecutionContext struct {
 	Agent       AgentSnapshot `json:"agent"`
 	Event       domain.Event  `json:"event"`
@@ -24,11 +22,10 @@ type ExecutionContext struct {
 	AttemptID   domain.ID     `json:"attempt_id"`
 }
 
-// ExecutionResult 是一次 Agent 处理的输出。
-// StateUpdate 会合并回 Agent.State；Actions 会在状态提交成功后交给 Executor。
+//本轮输出，状态提交后才执行action
 type ExecutionResult = domain.ExecutionResult
 
-// AgentRunner 是具体 Agent 必须实现的接口。
+//agent执行接口
 type AgentRunner interface {
 	Run(context ExecutionContext) (ExecutionResult, error)
 }

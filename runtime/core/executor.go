@@ -7,42 +7,35 @@ import (
 	"sync"
 )
 
-// ActionHandler 是一种外部能力的具体实现，例如发消息或写文件。
+//外部能力接口
 type ActionHandler interface {
 	Execute(action domain.Action) (map[string]any, error)
 }
 
-// EchoHandler 是最小示例：直接返回 Action 携带的数据。
+//原样返回action数据
 type EchoHandler struct{}
 
 func (EchoHandler) Execute(action domain.Action) (map[string]any, error) {
 	return cloneMap(action.Payload), nil
 }
 
-// Executor 执行 Action，并把结果包装为 action.result Event。
-// 已完成 Action 的结果会被缓存，因此同一 Action ID 不会重复执行。
+//执行action并生成结果事件，已完成的结果直接复用
 type Executor struct {
 	mu       sync.Mutex
 	handlers map[string]ActionHandler
+	options  map[string]HandlerOptions
 	results  map[domain.ID]domain.Event
 	statuses map[domain.ID]domain.ActionStatus
 }
 
 func NewExecutor() *Executor {
-	return &Executor{handlers: make(map[string]ActionHandler), results: make(map[domain.ID]domain.Event), statuses: make(map[domain.ID]domain.ActionStatus)}
+	return &Executor{handlers: make(map[string]ActionHandler), options: make(map[string]HandlerOptions), results: make(map[domain.ID]domain.Event), statuses: make(map[domain.ID]domain.ActionStatus)}
 }
 
 func (e *Executor) Register(actionType string, handler ActionHandler) error {
-	if handler == nil {
-		return fmt.Errorf("注册 Action 类型 %s: handler 不能为空", actionType)
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, exists := e.handlers[actionType]; exists {
-		return fmt.Errorf("Action 类型 %s 已存在", actionType)
-	}
-	e.handlers[actionType] = handler
-	return nil
+	return e.RegisterWithOptions(actionType, handler, HandlerOptions{
+		Version: "1", RecoveryPolicy: domain.RecoveryPolicyManual, MaxAttempts: 1,
+	})
 }
 
 func (e *Executor) Execute(action domain.Action) (domain.Event, error) {

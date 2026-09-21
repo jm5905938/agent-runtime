@@ -3,11 +3,12 @@ package core
 import (
 	"agent-runtime/codec"
 	"agent-runtime/domain"
+	"context"
 	"fmt"
 	"reflect"
 )
 
-// Definition是对agent的定义
+//agent定义
 //好吧我实在想不到可以用什么更好的词语，那就放点洋屁吧
 func (r *Runtime) RegisterDefinition(ref domain.DefinitionRef, runner AgentRunner) error {
 	if err := ref.Validate(); err != nil {
@@ -29,6 +30,10 @@ func (r *Runtime) RegisterDefinition(ref domain.DefinitionRef, runner AgentRunne
 }
 
 func (r *Runtime) CreateAgent(name string, ref domain.DefinitionRef, initialState map[string]any) (AgentSnapshot, error) {
+	return r.CreateAgentContext(context.Background(), name, ref, initialState)
+}
+
+func (r *Runtime) CreateAgentContext(ctx context.Context, name string, ref domain.DefinitionRef, initialState map[string]any) (AgentSnapshot, error) {
 	if err := ref.Validate(); err != nil {
 		return AgentSnapshot{}, err
 	}
@@ -39,10 +44,10 @@ func (r *Runtime) CreateAgent(name string, ref domain.DefinitionRef, initialStat
 	}
 	agent := domain.NewAgentInstance(name)
 	agent.Definition, agent.State, agent.Status = ref, initialState, domain.AgentStatusActive
-	if err := r.loadAgentLocked(agent); err != nil {
+	if err := r.store.CreateAgent(ctx, agent); err != nil {
 		return AgentSnapshot{}, err
 	}
-	return r.registry.Get(agent.ID)
+	return snapshotAgent(agent), nil
 }
 
 func (r *Runtime) RestoreAgent(agent domain.AgentInstance) error {
@@ -52,9 +57,7 @@ func (r *Runtime) RestoreAgent(agent domain.AgentInstance) error {
 	if err := validateAgentStatus(agent.Status); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.loadAgentLocked(agent)
+	return r.store.CreateAgent(context.Background(), agent)
 }
 
 func validateAgentStatus(status domain.AgentStatus) error {
@@ -69,7 +72,7 @@ func validateAgentStatus(status domain.AgentStatus) error {
 
 func (r *Runtime) bindingError(ref domain.DefinitionRef) error {
 	if _, ok := r.definitions[ref]; !ok {
-		return fmt.Errorf("缺少Definition绑定 %s@%s", ref.ID, ref.Version)
+		return fmt.Errorf("%w: 缺少Definition绑定 %s@%s", ErrAgentUnavailable, ref.ID, ref.Version)
 	}
 	return nil
 }
