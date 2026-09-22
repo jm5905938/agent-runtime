@@ -1,6 +1,6 @@
 package runtime
 
-import "agent-runtime/domain"
+import "agent-runtime/runtime/domain"
 
 // StateManager 统一将 Agent 返回的状态增量写回 Agent。
 // 当前是内存实现；以后可在这里替换为带事务的数据库提交。

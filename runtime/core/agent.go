@@ -3,13 +3,14 @@
 // 这个包负责“怎么运行”，domain 包负责“运行时有哪些数据”。
 package runtime
 
-import "agent-runtime/domain"
+import "agent-runtime/runtime/domain"
+
 //防止修改原agent
 type AgentSnapshot struct {
-	ID    domain.ID
-	Name  string
+	ID     domain.ID
+	Name   string
 	Status domain.AgentStatus
-	State map[string]any
+	State  map[string]any
 }
 
 // ExecutionContext 是 Agent 处理一条事件时能看到的输入。

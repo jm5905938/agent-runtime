@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"agent-runtime/domain"
+	"agent-runtime/runtime/domain"
 	"fmt"
 	"sync"
 	"time"
@@ -74,6 +74,7 @@ func (r *Runtime) Register(
 
 	return nil
 }
+
 // Agent只读快照
 func (r *Runtime) Agent(
 	agentID domain.ID,
@@ -83,6 +84,7 @@ func (r *Runtime) Agent(
 
 	return r.registry.Get(agentID)
 }
+
 // Process 立即处理一条事件。同一个 Agent 的 Process 调用会串行执行。
 func (r *Runtime) Process(agentID domain.ID, event domain.Event) (ExecutionResult, error) {
 	r.mu.Lock()
@@ -125,10 +127,10 @@ func (r *Runtime) processLocked(agent *domain.AgentInstance, runner AgentRunner,
 		r.mu.Unlock()
 	}()
 	result, err = runner.Run(ExecutionContext{Agent: AgentSnapshot{
-		ID: agent.ID,
-		Name: agent.Name,
+		ID:     agent.ID,
+		Name:   agent.Name,
 		Status: agent.Status,
-		State: cloneMap(agent.State)}, Event: cloneEvent(event)})
+		State:  cloneMap(agent.State)}, Event: cloneEvent(event)})
 
 	if err != nil {
 		return ExecutionResult{}, err
@@ -237,4 +239,3 @@ func (r *Runtime) Actions() map[domain.ID]domain.Action {
 	}
 	return result
 }
-

@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"agent-runtime/domain"
+	"agent-runtime/runtime/domain"
 	"fmt"
 	"sync"
 )

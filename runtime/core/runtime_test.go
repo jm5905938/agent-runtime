@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"agent-runtime/domain"
+	"agent-runtime/runtime/domain"
 	"errors"
 	"testing"
 )
@@ -99,7 +99,6 @@ func TestRunUntilIdleProcessesActionResult(t *testing.T) {
 	}
 }
 
-
 func TestProcessFailureRecordsExecution(t *testing.T) {
 	runtime := NewRuntime()
 
@@ -152,7 +151,6 @@ func TestProcessFailureRecordsExecution(t *testing.T) {
 	t.Fatal("no execution recorded")
 }
 
-
 func TestRegisteredAgentIsIsolatedFromCaller(t *testing.T) {
 	runtime := NewRuntime()
 
@@ -174,17 +172,14 @@ func TestRegisteredAgentIsIsolatedFromCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
 	// 修改外部持有的 Agent
 	agent.State["count"] = 999
-
 
 	snapshot, err := runtime.Agent(agent.ID)
 
 	if err != nil {
 		t.Fatal(err)
 	}
-
 
 	if snapshot.State["count"] != 1 {
 
@@ -195,14 +190,12 @@ func TestRegisteredAgentIsIsolatedFromCaller(t *testing.T) {
 	}
 }
 
-
 func TestRunnerCannotMutatePersistentAgentState(t *testing.T) {
 	runtime := NewRuntime()
 
 	agent := domain.NewAgentInstance("test")
 
 	agent.State["count"] = 1
-
 
 	if err := runtime.Register(
 		&agent,
@@ -224,7 +217,6 @@ func TestRunnerCannotMutatePersistentAgentState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
 	if _, err := runtime.Process(
 		agent.ID,
 		domain.NewEvent("test", nil),
@@ -232,13 +224,11 @@ func TestRunnerCannotMutatePersistentAgentState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
 	snapshot, err := runtime.Agent(agent.ID)
 
 	if err != nil {
 		t.Fatal(err)
 	}
-
 
 	if snapshot.State["count"] != 1 {
 
@@ -249,11 +239,9 @@ func TestRunnerCannotMutatePersistentAgentState(t *testing.T) {
 	}
 }
 
-
 func TestLifecycleRejectsIllegalTransition(t *testing.T) {
 
 	agent := domain.NewAgentInstance("test")
-
 
 	if err := (LifecycleManager{}).Transition(
 		&agent,
@@ -262,7 +250,6 @@ func TestLifecycleRejectsIllegalTransition(t *testing.T) {
 
 		t.Fatal("expected transition error")
 	}
-
 
 	if agent.Status != domain.AgentStatusCreated {
 

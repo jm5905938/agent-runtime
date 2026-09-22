@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"agent-runtime/domain"
+	"agent-runtime/runtime/domain"
 	"fmt"
 )
 
@@ -32,7 +32,7 @@ func (r *AgentRegistry) Register(agent *domain.AgentInstance) error {
 	return nil
 }
 
-//real
+// real
 func (r *AgentRegistry) getMutable(
 	agentID domain.ID,
 ) (*domain.AgentInstance, error) {
@@ -44,7 +44,7 @@ func (r *AgentRegistry) getMutable(
 	return agent, nil
 }
 
-//快照
+// 快照
 func (r *AgentRegistry) Get(
 	agentID domain.ID,
 ) (AgentSnapshot, error) {

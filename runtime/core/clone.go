@@ -1,6 +1,6 @@
 package runtime
 
-import "agent-runtime/domain"
+import "agent-runtime/runtime/domain"
 
 func cloneValue(value any) any {
 	switch value := value.(type) {
@@ -51,6 +51,6 @@ func cloneActions(source []domain.Action) []domain.Action {
 	return result
 }
 func cloneAgent(agent domain.AgentInstance) domain.AgentInstance {
-    agent.State = cloneMap(agent.State)
-    return agent
+	agent.State = cloneMap(agent.State)
+	return agent
 }
