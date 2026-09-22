@@ -146,8 +146,8 @@ func TestPrepareActionsRejectsBatchWithoutCallingHandlers(t *testing.T) {
 		actions []domain.Action
 		message string
 	}{
-		{"duplicate ID", []domain.Action{action, action}, "重复 Action ID"},
-		{"missing handler", []domain.Action{action, domain.NewAction("missing", nil)}, "未注册 Action 类型 missing"},
+		{"duplicate ID", []domain.Action{action, action}, "重复 action id"},
+		{"missing handler", []domain.Action{action, domain.NewAction("missing", nil)}, "未注册 action 类型 missing"},
 		{"unsupported data", []domain.Action{action, domain.NewAction("echo", map[string]any{"invalid": func() {}})}, "输入"},
 		{"empty action ID", []domain.Action{{Type: "echo"}}, "id/type"},
 	}
