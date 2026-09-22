@@ -11,19 +11,24 @@ import (
 //agent定义
 //好吧我实在想不到可以用什么更好的词语，那就放点洋屁吧
 func (r *Runtime) RegisterDefinition(ref domain.DefinitionRef, runner AgentRunner) error {
+	done, err := r.enter()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if err := ref.Validate(); err != nil {
 		return err
 	}
 	if _, err := codec.Encode(ref); err != nil {
-		return fmt.Errorf("Definition记录: %w", err)
+		return fmt.Errorf("definition记录: %w", err)
 	}
 	if nilRunner(runner) {
-		return fmt.Errorf("注册Definition出错: runner不能为空")
+		return fmt.Errorf("注册definition出错: runner不能为空")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.definitions[ref]; exists {
-		return fmt.Errorf("Definition %s@%s 已注册", ref.ID, ref.Version)
+		return fmt.Errorf("definition %s@%s 已注册", ref.ID, ref.Version)
 	}
 	r.definitions[ref] = runner
 	return nil
@@ -34,6 +39,11 @@ func (r *Runtime) CreateAgent(name string, ref domain.DefinitionRef, initialStat
 }
 
 func (r *Runtime) CreateAgentContext(ctx context.Context, name string, ref domain.DefinitionRef, initialState map[string]any) (AgentSnapshot, error) {
+	done, err := r.enter()
+	if err != nil {
+		return AgentSnapshot{}, err
+	}
+	defer done()
 	if err := ref.Validate(); err != nil {
 		return AgentSnapshot{}, err
 	}
@@ -51,6 +61,11 @@ func (r *Runtime) CreateAgentContext(ctx context.Context, name string, ref domai
 }
 
 func (r *Runtime) RestoreAgent(agent domain.AgentInstance) error {
+	done, err := r.enter()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if err := agent.Definition.Validate(); err != nil {
 		return err
 	}
@@ -66,13 +81,13 @@ func validateAgentStatus(status domain.AgentStatus) error {
 		domain.AgentStatusTerminating, domain.AgentStatusTerminated:
 		return nil
 	default:
-		return fmt.Errorf("Agent生命周期无效 %q", status)
+		return fmt.Errorf("agent生命周期无效 %q", status)
 	}
 }
 
 func (r *Runtime) bindingError(ref domain.DefinitionRef) error {
 	if _, ok := r.definitions[ref]; !ok {
-		return fmt.Errorf("%w: 缺少Definition绑定 %s@%s", ErrAgentUnavailable, ref.ID, ref.Version)
+		return fmt.Errorf("%w: 缺少definition绑定 %s@%s", ErrAgentUnavailable, ref.ID, ref.Version)
 	}
 	return nil
 }

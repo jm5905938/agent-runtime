@@ -19,7 +19,7 @@ var allowedTransitions = map[domain.AgentStatus]map[domain.AgentStatus]bool{
 //切换状态，非法转换保持原状
 func (LifecycleManager) Transition(agent *domain.AgentInstance, target domain.AgentStatus) error {
 	if agent == nil {
-		return fmt.Errorf("切换 Agent 生命周期: Agent 不能为空")
+		return fmt.Errorf("切换 agent 生命周期: agent 不能为空")
 	}
 	if !allowedTransitions[agent.Status][target] {
 		return fmt.Errorf("不能从 %s 切换到 %s", agent.Status, target)

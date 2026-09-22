@@ -42,7 +42,7 @@ func validateData(value any, path string, active map[visit]bool) error {
 		return nil
 	case string:
 		if !utf8.ValidString(value) {
-			return fmt.Errorf("%s: 非法UTF-8编码", path)
+			return fmt.Errorf("%s: 非法utf-8编码", path)
 		}
 	case float32:
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
@@ -57,13 +57,13 @@ func validateData(value any, path string, active map[visit]bool) error {
 		decoder.UseNumber()
 		var decoded any
 		if err := decoder.Decode(&decoded); err != nil {
-			return fmt.Errorf("%s: 非法JSON数字 %q", path, value)
+			return fmt.Errorf("%s: 非法json数字 %q", path, value)
 		}
 		if number, ok := decoded.(json.Number); !ok || string(number) != string(value) {
-			return fmt.Errorf("%s: 非法JSON数字 %q", path, value)
+			return fmt.Errorf("%s: 非法json数字 %q", path, value)
 		}
 		if err := decoder.Decode(new(any)); err != io.EOF {
-			return fmt.Errorf("%s: 非法JSON数字 %q", path, value)
+			return fmt.Errorf("%s: 非法json数字 %q", path, value)
 		}
 	case map[string]any:
 		v := reflect.ValueOf(value)
@@ -74,7 +74,7 @@ func validateData(value any, path string, active map[visit]bool) error {
 		defer leave()
 		for key, item := range value {
 			if !utf8.ValidString(key) {
-				return fmt.Errorf("%s: 对象键非法UTF-8编码", path)
+				return fmt.Errorf("%s: 对象键非法utf-8编码", path)
 			}
 			if err := validateData(item, fmt.Sprintf("%s[%q]", path, key), active); err != nil {
 				return err
@@ -112,7 +112,7 @@ func Encode(value any) ([]byte, error) {
 	}
 	data, err := json.Marshal(normalized.Interface())
 	if err != nil {
-		return nil, fmt.Errorf("JSON 编码失败: %w", err)
+		return nil, fmt.Errorf("json 编码失败: %w", err)
 	}
 	return data, nil
 }
@@ -123,7 +123,7 @@ func Decode(data []byte, dst any) error {
 		return fmt.Errorf("解码目标必须是非空指针")
 	}
 	if !utf8.Valid(data) {
-		return fmt.Errorf("JSON 数据包含非法 UTF-8 编码")
+		return fmt.Errorf("json 数据包含非法 utf-8 编码")
 	}
 	if err := validateType(v.Type().Elem(), make(map[reflect.Type]bool)); err != nil {
 		return err
@@ -133,13 +133,13 @@ func Decode(data []byte, dst any) error {
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(temporary.Interface()); err != nil {
-		return fmt.Errorf("JSON 解码失败: %w", err)
+		return fmt.Errorf("json 解码失败: %w", err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("只允许包含一个 JSON 值")
+			return fmt.Errorf("只允许包含一个 json 值")
 		}
-		return fmt.Errorf("JSON 值后存在非法数据: %w", err)
+		return fmt.Errorf("json 值后存在非法数据: %w", err)
 	}
 	normalized, err := normalize(temporary.Elem(), "$", make(map[visit]bool))
 	if err != nil {
@@ -160,7 +160,7 @@ func validateType(t reflect.Type, seen map[reflect.Type]bool) error {
 	seen[t] = true
 	for _, hook := range hookTypes {
 		if t.Implements(hook) || (t.Kind() != reflect.Pointer && reflect.PointerTo(t).Implements(hook)) {
-			return fmt.Errorf("类型 %s 不支持自定义 JSON 或文本编解码方法", t)
+			return fmt.Errorf("类型 %s 不支持自定义 json 或文本编解码方法", t)
 		}
 	}
 	switch t.Kind() {
@@ -204,7 +204,7 @@ func normalize(v reflect.Value, path string, active map[visit]bool) (reflect.Val
 	if v.Type() == timeType {
 		utc := v.Interface().(time.Time).UTC()
 		if _, err := utc.MarshalJSON(); err != nil {
-			return reflect.Value{}, fmt.Errorf("%s: UTC 时间无效: %w", path, err)
+			return reflect.Value{}, fmt.Errorf("%s: utc 时间无效: %w", path, err)
 		}
 		return reflect.ValueOf(utc), nil
 	}
@@ -258,7 +258,7 @@ func normalize(v reflect.Value, path string, active map[visit]bool) (reflect.Val
 		return result, nil
 	case reflect.String:
 		if !utf8.ValidString(v.String()) {
-			return reflect.Value{}, fmt.Errorf("%s: 字符串非合法UTF-8", path)
+			return reflect.Value{}, fmt.Errorf("%s: 字符串非合法utf-8", path)
 		}
 	case reflect.Float32, reflect.Float64:
 		if math.IsNaN(v.Float()) || math.IsInf(v.Float(), 0) {

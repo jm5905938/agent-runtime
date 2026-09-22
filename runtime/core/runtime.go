@@ -25,7 +25,16 @@ type Runtime struct {
 	executor    *Executor
 	mu          sync.Mutex
 	definitions map[domain.DefinitionRef]AgentRunner
-	drainMu     sync.Mutex
+	drain       chan struct{}
+	session     RecoverySession
+	recovery    RecoveryReport
+	lifeMu      sync.Mutex
+	stopping    bool
+	closed      bool
+	inflight    int
+	stop        chan struct{}
+	drained     chan struct{}
+	closeGate   chan struct{}
 }
 
 func NewRuntime() *Runtime {
@@ -34,13 +43,21 @@ func NewRuntime() *Runtime {
 
 func NewRuntimeWithStore(store StateStore) (*Runtime, error) {
 	if store == nil || isNilValue(store) {
-		return nil, fmt.Errorf("创建 Runtime: store 不能为空")
+		return nil, fmt.Errorf("创建 runtime: store 不能为空")
+	}
+	if _, session := store.(RecoverySession); session {
+		return nil, fmt.Errorf("恢复会话请通过 OpenRuntime 使用")
 	}
 	return newRuntime(store), nil
 }
 
 func newRuntime(store StateStore) *Runtime {
-	return &Runtime{store: store, executor: NewExecutor(), definitions: make(map[domain.DefinitionRef]AgentRunner)}
+	runtime := &Runtime{store: store, executor: NewExecutor(), definitions: make(map[domain.DefinitionRef]AgentRunner),
+		drain: make(chan struct{}, 1), stop: make(chan struct{}), drained: make(chan struct{}), closeGate: make(chan struct{}, 1)}
+	runtime.drain <- struct{}{}
+	runtime.closeGate <- struct{}{}
+	runtime.executor.runtime = runtime
+	return runtime
 }
 
 func isNilValue(value any) bool {
@@ -57,8 +74,13 @@ func (r *Runtime) Executor() *Executor { return r.executor }
 
 //保存agent与实现，新实例转为active
 func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) error {
+	done, err := r.enter()
+	if err != nil {
+		return err
+	}
+	defer done()
 	if agent == nil || nilRunner(runner) {
-		return fmt.Errorf("注册 Agent: Agent 和 runner 不能为空")
+		return fmt.Errorf("注册 agent: agent 和 runner 不能为空")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -70,7 +92,7 @@ func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) erro
 		return err
 	}
 	if _, exists := r.definitions[owned.Definition]; exists {
-		return fmt.Errorf("Definition 已注册，请使用 CreateAgent 或 RestoreAgent")
+		return fmt.Errorf("definition 已注册，请使用 CreateAgent 或 RestoreAgent")
 	}
 	if err := validateAgentStatus(owned.Status); err != nil {
 		return err
@@ -93,6 +115,11 @@ func (r *Runtime) Agent(agentID domain.ID) (AgentSnapshot, error) {
 }
 
 func (r *Runtime) AgentContext(ctx context.Context, agentID domain.ID) (AgentSnapshot, error) {
+	done, err := r.enter()
+	if err != nil {
+		return AgentSnapshot{}, err
+	}
+	defer done()
 	agent, err := r.store.LoadAgent(ctx, agentID)
 	if err != nil {
 		return AgentSnapshot{}, err
@@ -112,7 +139,12 @@ func (r *Runtime) Process(agentID domain.ID, event domain.Event) (ExecutionResul
 }
 
 func (r *Runtime) ProcessContext(ctx context.Context, agentID domain.ID, event domain.Event) (ExecutionResult, error) {
-	received, err := r.SubmitContext(ctx, agentID, event)
+	done, err := r.enter()
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	defer done()
+	received, err := r.receiveEvent(ctx, agentID, event)
 	if err != nil {
 		return ExecutionResult{}, err
 	}
@@ -131,7 +163,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 			return ExecutionResult{}, &storeFailureError{cause: err}
 		}
 		if saved.Execution.Result == nil {
-			return ExecutionResult{}, fmt.Errorf("已完成 Execution %s 缺少结果", delivery.ExecutionID)
+			return ExecutionResult{}, fmt.Errorf("已完成 execution %s 缺少结果", delivery.ExecutionID)
 		}
 		return cloneResult(*saved.Execution.Result), nil
 	case domain.DeliveryStatusRunning:
@@ -147,7 +179,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 		return ExecutionResult{}, &storeFailureError{cause: err}
 	}
 	if agent.Status != domain.AgentStatusActive {
-		return ExecutionResult{}, fmt.Errorf("%w: Agent %s 当前状态 %s", ErrAgentUnavailable, agent.ID, agent.Status)
+		return ExecutionResult{}, fmt.Errorf("%w: agent %s 当前状态 %s", ErrAgentUnavailable, agent.ID, agent.Status)
 	}
 	r.mu.Lock()
 	runner := r.definitions[agent.Definition]
@@ -185,7 +217,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	})
 	if err != nil {
 		//提交报错也可能已生效，不能改记失败
-		return ExecutionResult{}, &storeFailureError{cause: fmt.Errorf("提交 Execution %s: %w", claim.Token.ExecutionID, err)}
+		return ExecutionResult{}, &storeFailureError{cause: fmt.Errorf("提交 execution %s: %w", claim.Token.ExecutionID, err)}
 	}
 	return cloneResult(committed), nil
 }
@@ -231,7 +263,7 @@ func runAgent(runner AgentRunner, ctx ExecutionContext) (result ExecutionResult,
 	failureKind = domain.ErrorKindBusiness
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("Runner panic: %v", recovered)
+			err = fmt.Errorf("runner panic: %v", recovered)
 			result = ExecutionResult{}
 			failureKind = domain.ErrorKindRuntime
 		}
@@ -251,7 +283,7 @@ func (r *Runtime) recordFailure(ctx context.Context, token ExecutionToken, kind 
 		Token: token, Failure: domain.Failure{Kind: kind, Message: recordText(cause.Error())}, Interrupted: interrupted,
 	})
 	if err != nil {
-		return &storeFailureError{cause: fmt.Errorf("保存 Execution 失败记录: %w", errors.Join(cause, err))}
+		return &storeFailureError{cause: fmt.Errorf("保存 execution 失败记录: %w", errors.Join(cause, err))}
 	}
 	return &executionFailureError{cause: cause}
 }
@@ -274,6 +306,15 @@ func (r *Runtime) Submit(agentID domain.ID, event domain.Event) error {
 }
 
 func (r *Runtime) SubmitContext(ctx context.Context, agentID domain.ID, event domain.Event) (ReceivedEvent, error) {
+	done, err := r.enter()
+	if err != nil {
+		return ReceivedEvent{}, err
+	}
+	defer done()
+	return r.receiveEvent(ctx, agentID, event)
+}
+
+func (r *Runtime) receiveEvent(ctx context.Context, agentID domain.ID, event domain.Event) (ReceivedEvent, error) {
 	if err := validateEvent(event); err != nil {
 		return ReceivedEvent{}, err
 	}
@@ -281,6 +322,11 @@ func (r *Runtime) SubmitContext(ctx context.Context, agentID domain.ID, event do
 }
 
 func (r *Runtime) Retry(ctx context.Context, key domain.DeliveryKey) error {
+	done, err := r.enter()
+	if err != nil {
+		return err
+	}
+	defer done()
 	return r.store.RequeueDelivery(ctx, key)
 }
 
@@ -290,11 +336,25 @@ func (r *Runtime) RunUntilIdle() error {
 }
 
 func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
-	r.drainMu.Lock()
-	defer r.drainMu.Unlock()
+	done, err := r.enter()
+	if err != nil {
+		return err
+	}
+	defer done()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.stop:
+		return nil
+	case <-r.drain:
+	}
+	defer func() { r.drain <- struct{}{} }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if r.isStopping() {
+			return nil
 		}
 		deliveries, err := r.store.ListDeliveries(ctx, domain.DeliveryStatusPending)
 		if err != nil {
@@ -302,6 +362,9 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 		}
 		progress := false
 		for _, delivery := range deliveries {
+			if r.isStopping() {
+				return nil
+			}
 			_, err := r.processDelivery(ctx, delivery.Key)
 			_, storageFailure := err.(*storeFailureError)
 			_, executionFailure := err.(*executionFailureError)
@@ -316,11 +379,22 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 				return err
 			}
 		}
-		actions, err := r.store.ListActions(ctx, domain.ActionStatusPending)
+		statuses := []domain.ActionStatus{domain.ActionStatusPending}
+		if r.session != nil {
+			statuses = append(statuses, domain.ActionStatusUnknown)
+		}
+		actions, err := r.store.ListActions(ctx, statuses...)
 		if err != nil {
 			return err
 		}
 		for _, action := range actions {
+			if r.isStopping() {
+				return nil
+			}
+			if action.Status == domain.ActionStatusUnknown &&
+				(action.RecoveryPolicy != domain.RecoveryPolicySafeRetry || action.AttemptCount >= action.MaxAttempts) {
+				continue
+			}
 			if err := r.executeAction(ctx, action); err != nil {
 				if _, storageFailure := err.(*storeFailureError); storageFailure {
 					return err
@@ -345,6 +419,11 @@ func (r *Runtime) Executions() map[domain.ID]domain.Execution {
 }
 
 func (r *Runtime) ExecutionsContext(ctx context.Context) (map[domain.ID]domain.Execution, error) {
+	done, err := r.enter()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	stored, err := r.storedExecutions(ctx)
 	if err != nil {
 		return nil, err
@@ -362,6 +441,11 @@ func (r *Runtime) Attempts() map[domain.ID]domain.Attempt {
 }
 
 func (r *Runtime) AttemptsContext(ctx context.Context) (map[domain.ID]domain.Attempt, error) {
+	done, err := r.enter()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	stored, err := r.storedExecutions(ctx)
 	if err != nil {
 		return nil, err
@@ -401,10 +485,10 @@ func (r *Runtime) storedExecutions(ctx context.Context) ([]StoredExecution, erro
 
 func validateEvent(event domain.Event) error {
 	if event.ID == "" || event.Type == "" {
-		return fmt.Errorf("Event id/type 不能为空")
+		return fmt.Errorf("event id/type 不能为空")
 	}
 	if _, err := codec.Encode(event); err != nil {
-		return fmt.Errorf("Event 记录: %w", err)
+		return fmt.Errorf("event 记录: %w", err)
 	}
 	return nil
 }
@@ -416,6 +500,11 @@ func (r *Runtime) Actions() map[domain.ID]domain.Action {
 }
 
 func (r *Runtime) ActionsContext(ctx context.Context) (map[domain.ID]domain.Action, error) {
+	done, err := r.enter()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	records, err := r.store.ListActions(ctx)
 	if err != nil {
 		return nil, err
@@ -425,4 +514,14 @@ func (r *Runtime) ActionsContext(ctx context.Context) (map[domain.ID]domain.Acti
 		result[record.Request.ID] = cloneActions([]domain.Action{record.Request})[0]
 	}
 	return result, nil
+}
+
+//action状态、结果和尝试记录
+func (r *Runtime) ActionContext(ctx context.Context, actionID domain.ID) (*StoredAction, error) {
+	done, err := r.enter()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return r.store.LoadAction(ctx, actionID)
 }

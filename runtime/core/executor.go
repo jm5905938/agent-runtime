@@ -3,9 +3,12 @@ package core
 import (
 	"agent-runtime/codec"
 	"agent-runtime/domain"
+	"errors"
 	"fmt"
 	"sync"
 )
+
+var ErrActionRequiresStore = errors.New("executor: recovery runtime actions must run through the store")
 
 //外部能力接口
 type ActionHandler interface {
@@ -21,6 +24,7 @@ func (EchoHandler) Execute(action domain.Action) (map[string]any, error) {
 
 //执行action并生成结果事件，已完成的结果直接复用
 type Executor struct {
+	runtime  *Runtime
 	mu       sync.Mutex
 	handlers map[string]ActionHandler
 	options  map[string]HandlerOptions
@@ -39,6 +43,16 @@ func (e *Executor) Register(actionType string, handler ActionHandler) error {
 }
 
 func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
+	if e.runtime != nil {
+		done, err := e.runtime.enter()
+		if err != nil {
+			return domain.Event{}, err
+		}
+		defer done()
+		if e.runtime.session != nil {
+			return domain.Event{}, ErrActionRequiresStore
+		}
+	}
 	if err := validateResult(ExecutionResult{Actions: []domain.Action{action}}); err != nil {
 		return domain.Event{}, err
 	}
@@ -48,7 +62,7 @@ func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
 		return cloneEvent(event), nil
 	}
 	if e.statuses[action.ID] == domain.ActionStatusUnknown {
-		return domain.Event{}, fmt.Errorf("Action %s 的结果未知，需要确认后处理", action.ID)
+		return domain.Event{}, fmt.Errorf("action %s 的结果未知，需要确认后处理", action.ID)
 	}
 	e.statuses[action.ID] = domain.ActionStatusRunning
 	payload := map[string]any{"action_id": string(action.ID), "action_type": action.Type, "execution_id": ""}
@@ -58,14 +72,14 @@ func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
 	handler, exists := e.handlers[action.Type]
 	if !exists {
 		payload["status"] = "failed"
-		payload["error"] = fmt.Sprintf("未注册 Action 类型 %s", action.Type)
+		payload["error"] = fmt.Sprintf("未注册 action 类型 %s", action.Type)
 	} else if result, err := handler.Execute(cloneActions([]domain.Action{action})[0]); err != nil {
 		payload["status"] = "failed"
 		payload["error"] = recordText(fmt.Sprintf("%T: %v", err, err))
 	} else {
 		if err := codec.ValidateData(result); err != nil {
 			e.statuses[action.ID] = domain.ActionStatusUnknown
-			return domain.Event{}, fmt.Errorf("Action %s 返回不支持的业务数据，结果未知: %w", action.ID, err)
+			return domain.Event{}, fmt.Errorf("action %s 返回不支持的业务数据，结果未知: %w", action.ID, err)
 		}
 		payload["status"] = "succeeded"
 		payload["result"] = cloneMap(result)

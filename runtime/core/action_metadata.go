@@ -18,28 +18,35 @@ type HandlerOptions struct {
 }
 
 func (e *Executor) RegisterWithOptions(actionType string, handler ActionHandler, options HandlerOptions) error {
+	if e.runtime != nil {
+		done, err := e.runtime.enter()
+		if err != nil {
+			return err
+		}
+		defer done()
+	}
 	if strings.TrimSpace(actionType) == "" || strings.TrimSpace(options.Version) == "" {
-		return fmt.Errorf("注册 Action: type/version 不能为空")
+		return fmt.Errorf("注册 action: type/version 不能为空")
 	}
 	if nilHandler(handler) {
-		return fmt.Errorf("注册 Action 类型 %s: handler 不能为空", actionType)
+		return fmt.Errorf("注册 action 类型 %s: handler 不能为空", actionType)
 	}
 	if options.RecoveryPolicy != domain.RecoveryPolicyManual && options.RecoveryPolicy != domain.RecoveryPolicySafeRetry {
-		return fmt.Errorf("注册 Action 类型 %s: 无效恢复策略 %q", actionType, options.RecoveryPolicy)
+		return fmt.Errorf("注册 action 类型 %s: 无效恢复策略 %q", actionType, options.RecoveryPolicy)
 	}
 	if options.MaxAttempts == 0 {
-		return fmt.Errorf("注册 Action 类型 %s: 最大尝试次数必须大于零", actionType)
+		return fmt.Errorf("注册 action 类型 %s: 最大尝试次数必须大于零", actionType)
 	}
 	if _, err := codec.Encode(struct {
 		Type    string
 		Options HandlerOptions
 	}{actionType, options}); err != nil {
-		return fmt.Errorf("注册 Action 元数据: %w", err)
+		return fmt.Errorf("注册 action 元数据: %w", err)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, exists := e.handlers[actionType]; exists {
-		return fmt.Errorf("Action 类型 %s 已存在", actionType)
+		return fmt.Errorf("action 类型 %s 已存在", actionType)
 	}
 	e.handlers[actionType] = handler
 	e.options[actionType] = options
@@ -56,16 +63,16 @@ func (e *Executor) prepareActions(agentID, executionID domain.ID, actions []doma
 	seen := make(map[domain.ID]bool, len(actions))
 	for _, action := range cloneActions(actions) {
 		if seen[action.ID] {
-			return nil, fmt.Errorf("重复 Action ID %s", action.ID)
+			return nil, fmt.Errorf("重复 action id %s", action.ID)
 		}
 		seen[action.ID] = true
 		options, exists := e.options[action.Type]
 		if !exists {
-			return nil, fmt.Errorf("未注册 Action 类型 %s", action.Type)
+			return nil, fmt.Errorf("未注册 action 类型 %s", action.Type)
 		}
 		resultEventID, err := domain.NewID()
 		if err != nil {
-			return nil, fmt.Errorf("Action %s 结果 Event ID: %w", action.ID, err)
+			return nil, fmt.Errorf("action %s 结果 event id: %w", action.ID, err)
 		}
 		action.BindExecution(executionID)
 		records = append(records, domain.ActionRecord{
@@ -83,11 +90,11 @@ func (e *Executor) handlerFor(record domain.ActionRecord) (ActionHandler, error)
 	defer e.mu.Unlock()
 	handler, exists := e.handlers[record.Request.Type]
 	if !exists {
-		return nil, fmt.Errorf("%w: 未注册 Action 类型 %s", ErrHandlerUnavailable, record.Request.Type)
+		return nil, fmt.Errorf("%w: 未注册 action 类型 %s", ErrHandlerUnavailable, record.Request.Type)
 	}
 	options := e.options[record.Request.Type]
 	if options.Version != record.HandlerVersion {
-		return nil, fmt.Errorf("%w: Action 类型 %s 需要 Handler 版本 %s，当前版本 %s",
+		return nil, fmt.Errorf("%w: action 类型 %s 需要 handler 版本 %s，当前版本 %s",
 			ErrHandlerUnavailable, record.Request.Type, record.HandlerVersion, options.Version)
 	}
 	return handler, nil
