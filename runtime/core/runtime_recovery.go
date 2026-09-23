@@ -20,7 +20,7 @@ func (e *RuntimeOpenError) Close(ctx context.Context) error { return e.session.C
 //取得会话，恢复后再允许执行
 func OpenRuntime(ctx context.Context, backend RecoveryStore) (*Runtime, error) {
 	if backend == nil || isNilValue(backend) {
-		return nil, fmt.Errorf("创建 runtime: recovery store 不能为空")
+		return nil, fmt.Errorf("创建runtime: recovery store不能为空")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func OpenRuntime(ctx context.Context, backend RecoveryStore) (*Runtime, error) {
 		return nil, err
 	}
 	if session == nil || isNilValue(session) {
-		return nil, fmt.Errorf("创建 runtime: store 返回空会话")
+		return nil, fmt.Errorf("创建runtime: store返回空会话")
 	}
 	report, err := session.Recover(ctx)
 	if err == nil {

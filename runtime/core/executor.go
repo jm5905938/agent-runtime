@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-var ErrActionRequiresStore = errors.New("executor: recovery runtime actions must run through the store")
+var ErrActionRequiresStore = errors.New("恢复runtime的action必须通过store执行")
 
 //外部能力接口
 type ActionHandler interface {
@@ -62,7 +62,7 @@ func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
 		return cloneEvent(event), nil
 	}
 	if e.statuses[action.ID] == domain.ActionStatusUnknown {
-		return domain.Event{}, fmt.Errorf("action %s 的结果未知，需要确认后处理", action.ID)
+		return domain.Event{}, fmt.Errorf("action %s的结果未知，需要确认后处理", action.ID)
 	}
 	e.statuses[action.ID] = domain.ActionStatusRunning
 	payload := map[string]any{"action_id": string(action.ID), "action_type": action.Type, "execution_id": ""}
@@ -72,14 +72,14 @@ func (e *Executor) Execute(action domain.Action) (domain.Event, error) {
 	handler, exists := e.handlers[action.Type]
 	if !exists {
 		payload["status"] = "failed"
-		payload["error"] = fmt.Sprintf("未注册 action 类型 %s", action.Type)
+		payload["error"] = fmt.Sprintf("未注册action类型%s", action.Type)
 	} else if result, err := handler.Execute(cloneActions([]domain.Action{action})[0]); err != nil {
 		payload["status"] = "failed"
 		payload["error"] = recordText(fmt.Sprintf("%T: %v", err, err))
 	} else {
 		if err := codec.ValidateData(result); err != nil {
 			e.statuses[action.ID] = domain.ActionStatusUnknown
-			return domain.Event{}, fmt.Errorf("action %s 返回不支持的业务数据，结果未知: %w", action.ID, err)
+			return domain.Event{}, fmt.Errorf("action %s返回不支持的业务数据，结果未知: %w", action.ID, err)
 		}
 		payload["status"] = "succeeded"
 		payload["result"] = cloneMap(result)

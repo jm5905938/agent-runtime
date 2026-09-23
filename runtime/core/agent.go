@@ -1,7 +1,10 @@
 //core负责运行流程，domain定义数据
 package core
 
-import "agent-runtime/domain"
+import (
+	"agent-runtime/domain"
+	"context"
+)
 
 //防止修改原agent
 type AgentSnapshot struct {
@@ -28,4 +31,16 @@ type ExecutionResult = domain.ExecutionResult
 //agent执行接口
 type AgentRunner interface {
 	Run(context ExecutionContext) (ExecutionResult, error)
+}
+
+//支持取消的runner，原有接口仍可使用
+type ContextAgentRunner interface {
+	AgentRunner
+	RunContext(context.Context, ExecutionContext) (ExecutionResult, error)
+}
+
+//适配层区分业务错误、运行错误和中断
+type RunnerFailure interface {
+	error
+	FailureKind() domain.ErrorKind
 }

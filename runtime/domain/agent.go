@@ -12,10 +12,10 @@ type DefinitionRef struct {
 
 func (d DefinitionRef) Validate() error {
 	if strings.TrimSpace(d.ID) == "" {
-		return fmt.Errorf("definition id must not be empty")
+		return fmt.Errorf("definition id不能为空")
 	}
 	if strings.TrimSpace(d.Version) == "" {
-		return fmt.Errorf("definition version must not be empty")
+		return fmt.Errorf("definition version不能为空")
 	}
 	return nil
 }

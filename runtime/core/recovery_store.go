@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	ErrStoreOwned       = errors.New("store: owner already active")
-	ErrStoreClosed      = errors.New("store: session closed")
-	ErrRecoveryRequired = errors.New("store: recovery required")
+	ErrStoreOwned       = errors.New("store已有活动持有者")
+	ErrStoreClosed      = errors.New("store session已关闭")
+	ErrRecoveryRequired = errors.New("store需要恢复")
 )
 
 //恢复会话入口

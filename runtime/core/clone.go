@@ -56,7 +56,6 @@ func cloneActions(source []domain.Action) []domain.Action {
 			result[i].BindExecution(*action.ExecutionID)
 		}
 	}
-
 	return result
 }
 func cloneAgent(agent domain.AgentInstance) domain.AgentInstance {

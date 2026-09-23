@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	ErrExecutionInProgress = errors.New("execution in progress")
-	ErrDeliveryFailed      = errors.New("delivery failed; explicit retry required")
-	ErrAgentUnavailable    = errors.New("agent unavailable")
-	ErrExecutionFailed     = errors.New("execution failed")
+	ErrExecutionInProgress = errors.New("execution进行中")
+	ErrDeliveryFailed      = errors.New("delivery失败，需要显式重试")
+	ErrAgentUnavailable    = errors.New("agent不可用")
+	ErrExecutionFailed     = errors.New("execution失败")
 )
 
 //事件、action、结果事件的执行闭环
@@ -43,10 +43,10 @@ func NewRuntime() *Runtime {
 
 func NewRuntimeWithStore(store StateStore) (*Runtime, error) {
 	if store == nil || isNilValue(store) {
-		return nil, fmt.Errorf("创建 runtime: store 不能为空")
+		return nil, fmt.Errorf("创建runtime: store不能为空")
 	}
 	if _, session := store.(RecoverySession); session {
-		return nil, fmt.Errorf("恢复会话请通过 OpenRuntime 使用")
+		return nil, fmt.Errorf("恢复会话请通过OpenRuntime使用")
 	}
 	return newRuntime(store), nil
 }
@@ -80,7 +80,7 @@ func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) erro
 	}
 	defer done()
 	if agent == nil || nilRunner(runner) {
-		return fmt.Errorf("注册 agent: agent 和 runner 不能为空")
+		return fmt.Errorf("注册agent: agent和runner不能为空")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -92,7 +92,7 @@ func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) erro
 		return err
 	}
 	if _, exists := r.definitions[owned.Definition]; exists {
-		return fmt.Errorf("definition 已注册，请使用 CreateAgent 或 RestoreAgent")
+		return fmt.Errorf("definition已注册，请使用CreateAgent或RestoreAgent")
 	}
 	if err := validateAgentStatus(owned.Status); err != nil {
 		return err
@@ -163,7 +163,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 			return ExecutionResult{}, &storeFailureError{cause: err}
 		}
 		if saved.Execution.Result == nil {
-			return ExecutionResult{}, fmt.Errorf("已完成 execution %s 缺少结果", delivery.ExecutionID)
+			return ExecutionResult{}, fmt.Errorf("已完成execution %s缺少结果", delivery.ExecutionID)
 		}
 		return cloneResult(*saved.Execution.Result), nil
 	case domain.DeliveryStatusRunning:
@@ -172,14 +172,14 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 		return ExecutionResult{}, ErrDeliveryFailed
 	case domain.DeliveryStatusPending:
 	default:
-		return ExecutionResult{}, fmt.Errorf("投递状态无效 %q", delivery.Status)
+		return ExecutionResult{}, fmt.Errorf("投递状态无效%q", delivery.Status)
 	}
 	agent, err := r.store.LoadAgent(ctx, key.AgentID)
 	if err != nil {
 		return ExecutionResult{}, &storeFailureError{cause: err}
 	}
 	if agent.Status != domain.AgentStatusActive {
-		return ExecutionResult{}, fmt.Errorf("%w: agent %s 当前状态 %s", ErrAgentUnavailable, agent.ID, agent.Status)
+		return ExecutionResult{}, fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
 	}
 	r.mu.Lock()
 	runner := r.definitions[agent.Definition]
@@ -195,12 +195,12 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	if err := ctx.Err(); err != nil {
 		return ExecutionResult{}, r.recordFailure(ctx, claim.Token, domain.ErrorKindInterrupted, err, true)
 	}
-	result, kind, runErr := runAgent(runner, ExecutionContext{
+	result, kind, runErr := runAgent(ctx, runner, ExecutionContext{
 		Agent: snapshotAgent(claim.Agent), Event: cloneEvent(claim.Event),
 		ExecutionID: claim.Token.ExecutionID, AttemptID: claim.Token.AttemptID,
 	})
 	if runErr != nil {
-		return ExecutionResult{}, r.failExecution(ctx, claim.Token, kind, runErr)
+		return ExecutionResult{}, r.recordFailure(ctx, claim.Token, kind, runErr, kind == domain.ErrorKindInterrupted)
 	}
 	if err := ctx.Err(); err != nil {
 		return ExecutionResult{}, r.recordFailure(ctx, claim.Token, domain.ErrorKindInterrupted, err, true)
@@ -217,7 +217,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	})
 	if err != nil {
 		//提交报错也可能已生效，不能改记失败
-		return ExecutionResult{}, &storeFailureError{cause: fmt.Errorf("提交 execution %s: %w", claim.Token.ExecutionID, err)}
+		return ExecutionResult{}, &storeFailureError{cause: fmt.Errorf("提交execution %s: %w", claim.Token.ExecutionID, err)}
 	}
 	return cloneResult(committed), nil
 }
@@ -259,16 +259,34 @@ func (r *Runtime) resolveClaimError(ctx context.Context, key domain.DeliveryKey,
 	return ExecutionResult{}, &storeFailureError{cause: cause}
 }
 
-func runAgent(runner AgentRunner, ctx ExecutionContext) (result ExecutionResult, failureKind domain.ErrorKind, err error) {
+func runAgent(ctx context.Context, runner AgentRunner, input ExecutionContext) (result ExecutionResult, failureKind domain.ErrorKind, err error) {
 	failureKind = domain.ErrorKindBusiness
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("runner panic: %v", recovered)
+			err = fmt.Errorf("runner异常: %v", recovered)
 			result = ExecutionResult{}
 			failureKind = domain.ErrorKindRuntime
 		}
 	}()
-	result, err = runner.Run(ctx)
+	if contextual, ok := runner.(ContextAgentRunner); ok {
+		result, err = contextual.RunContext(ctx, input)
+	} else {
+		result, err = runner.Run(input)
+	}
+	if err != nil {
+		var failure RunnerFailure
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			failureKind = domain.ErrorKindInterrupted
+		case errors.As(err, &failure):
+			switch kind := failure.FailureKind(); kind {
+			case domain.ErrorKindBusiness, domain.ErrorKindRuntime, domain.ErrorKindInterrupted:
+				failureKind = kind
+			default:
+				failureKind = domain.ErrorKindRuntime
+			}
+		}
+	}
 	return
 }
 
@@ -283,7 +301,7 @@ func (r *Runtime) recordFailure(ctx context.Context, token ExecutionToken, kind 
 		Token: token, Failure: domain.Failure{Kind: kind, Message: recordText(cause.Error())}, Interrupted: interrupted,
 	})
 	if err != nil {
-		return &storeFailureError{cause: fmt.Errorf("保存 execution 失败记录: %w", errors.Join(cause, err))}
+		return &storeFailureError{cause: fmt.Errorf("保存execution失败记录: %w", errors.Join(cause, err))}
 	}
 	return &executionFailureError{cause: cause}
 }
@@ -485,10 +503,10 @@ func (r *Runtime) storedExecutions(ctx context.Context) ([]StoredExecution, erro
 
 func validateEvent(event domain.Event) error {
 	if event.ID == "" || event.Type == "" {
-		return fmt.Errorf("event id/type 不能为空")
+		return fmt.Errorf("event id/type不能为空")
 	}
 	if _, err := codec.Encode(event); err != nil {
-		return fmt.Errorf("event 记录: %w", err)
+		return fmt.Errorf("event记录: %w", err)
 	}
 	return nil
 }

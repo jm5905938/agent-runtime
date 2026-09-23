@@ -27,7 +27,6 @@ func (resultRunner) Run(
 			},
 		}, nil
 	}
-
 	return ExecutionResult{
 		StateUpdate: map[string]any{
 			"count": 1,
@@ -144,7 +143,6 @@ func TestProcessFailureRecordsExecution(t *testing.T) {
 				execution,
 			)
 		}
-
 		return
 	}
 
@@ -209,7 +207,6 @@ func TestRunnerCannotMutatePersistentAgentState(t *testing.T) {
 
 				//尝试修改执行快照
 				ctx.Agent.State["count"] = 999
-
 				return ExecutionResult{}, nil
 			},
 		),

@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	ErrStoreNotFound = errors.New("store: record not found")
-	ErrStoreConflict = errors.New("store: identity or state conflict")
-	ErrStoreStaleClaim = errors.New("store: stale claim")
+	ErrStoreNotFound = errors.New("store中找不到记录")
+	ErrStoreConflict = errors.New("store身份或状态冲突")
+	ErrStoreStaleClaim = errors.New("store的claim已过期")
 )
 
 type ReceivedEvent struct {

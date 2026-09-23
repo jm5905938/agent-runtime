@@ -12,7 +12,7 @@ type StateManager struct{}
 
 func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) error {
 	if agent == nil {
-		return fmt.Errorf("提交状态: agent 不能为空")
+		return fmt.Errorf("提交状态: agent不能为空")
 	}
 	if _, err := codec.Encode(agent); err != nil {
 		return fmt.Errorf("原agent记录: %w", err)
@@ -41,10 +41,10 @@ func validateResult(result ExecutionResult) error {
 	}
 	for _, action := range result.Actions {
 		if action.ID == "" || action.Type == "" {
-			return fmt.Errorf("action id/type 不能为空")
+			return fmt.Errorf("action id/type不能为空")
 		}
 		if err := codec.ValidateData(action.Payload); err != nil {
-			return fmt.Errorf("action %s 输入: %w", action.ID, err)
+			return fmt.Errorf("action %s输入: %w", action.ID, err)
 		}
 	}
 	if _, err := codec.Encode(result); err != nil {

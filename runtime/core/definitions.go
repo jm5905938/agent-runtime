@@ -28,7 +28,7 @@ func (r *Runtime) RegisterDefinition(ref domain.DefinitionRef, runner AgentRunne
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.definitions[ref]; exists {
-		return fmt.Errorf("definition %s@%s 已注册", ref.ID, ref.Version)
+		return fmt.Errorf("definition %s@%s已注册", ref.ID, ref.Version)
 	}
 	r.definitions[ref] = runner
 	return nil
@@ -81,13 +81,13 @@ func validateAgentStatus(status domain.AgentStatus) error {
 		domain.AgentStatusTerminating, domain.AgentStatusTerminated:
 		return nil
 	default:
-		return fmt.Errorf("agent生命周期无效 %q", status)
+		return fmt.Errorf("agent生命周期无效%q", status)
 	}
 }
 
 func (r *Runtime) bindingError(ref domain.DefinitionRef) error {
 	if _, ok := r.definitions[ref]; !ok {
-		return fmt.Errorf("%w: 缺少definition绑定 %s@%s", ErrAgentUnavailable, ref.ID, ref.Version)
+		return fmt.Errorf("%w: 缺少definition绑定%s@%s", ErrAgentUnavailable, ref.ID, ref.Version)
 	}
 	return nil
 }

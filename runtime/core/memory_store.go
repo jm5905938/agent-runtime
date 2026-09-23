@@ -57,7 +57,7 @@ func (s *MemoryStore) CreateAgent(ctx context.Context, agent domain.AgentInstanc
 	}
 	defer s.mu.Unlock()
 	if strings.TrimSpace(string(agent.ID)) == "" {
-		return fmt.Errorf("agent id 不能为空")
+		return fmt.Errorf("agent id不能为空")
 	}
 	if err := agent.Definition.Validate(); err != nil {
 		return err
@@ -103,7 +103,7 @@ func (s *MemoryStore) ListAgents(ctx context.Context) ([]domain.AgentInstance, e
 
 func validateStoredEvent(event domain.Event) error {
 	if strings.TrimSpace(string(event.ID)) == "" || strings.TrimSpace(event.Type) == "" {
-		return fmt.Errorf("event id/type 不能为空")
+		return fmt.Errorf("event id/type不能为空")
 	}
 	if _, err := codec.Encode(event); err != nil {
 		return fmt.Errorf("event记录: %w", err)
@@ -125,7 +125,7 @@ func (s *MemoryStore) prepareEvent(agentID domain.ID, event domain.Event) (Recei
 			return ReceivedEvent{}, domain.Event{}, err
 		}
 		if !equal {
-			return ReceivedEvent{}, domain.Event{}, fmt.Errorf("event %s 内容不同: %w", event.ID, ErrStoreConflict)
+			return ReceivedEvent{}, domain.Event{}, fmt.Errorf("event %s内容不同: %w", event.ID, ErrStoreConflict)
 		}
 		event = saved
 	}
@@ -150,7 +150,7 @@ func (s *MemoryStore) ReceiveEvent(ctx context.Context, agentID domain.ID, event
 	if _, exists := s.events[event.ID]; !exists {
 		for _, action := range s.actions {
 			if action.ResultEventID == event.ID {
-				return ReceivedEvent{}, fmt.Errorf("event %s 已保留为action结果: %w", event.ID, ErrStoreConflict)
+				return ReceivedEvent{}, fmt.Errorf("event %s已保留为action结果: %w", event.ID, ErrStoreConflict)
 			}
 		}
 	}
@@ -226,11 +226,11 @@ func (s *MemoryStore) ClaimExecution(ctx context.Context, key domain.DeliveryKey
 		return nil, ErrDeliveryFailed
 	case domain.DeliveryStatusPending:
 	default:
-		return nil, fmt.Errorf("delivery %v 不可领取: %w", key, ErrStoreConflict)
+		return nil, fmt.Errorf("delivery %v不可领取: %w", key, ErrStoreConflict)
 	}
 	agent := s.agents[key.AgentID]
 	if agent.Status != domain.AgentStatusActive {
-		return nil, fmt.Errorf("agent %s 状态为 %s: %w", agent.ID, agent.Status, ErrAgentUnavailable)
+		return nil, fmt.Errorf("agent %s状态为%s: %w", agent.ID, agent.Status, ErrAgentUnavailable)
 	}
 	for _, other := range s.deliveries {
 		if other.Key.AgentID == key.AgentID && other.Status == domain.DeliveryStatusRunning {
@@ -243,7 +243,7 @@ func (s *MemoryStore) ClaimExecution(ctx context.Context, key domain.DeliveryKey
 			Status: domain.ExecutionStatusPending, CreatedAt: time.Now().UTC()}
 	}
 	if execution.AttemptCount == math.MaxUint64 {
-		return nil, fmt.Errorf("execution %s 尝试次数已耗尽: %w", execution.ID, ErrStoreConflict)
+		return nil, fmt.Errorf("execution %s尝试次数已耗尽: %w", execution.ID, ErrStoreConflict)
 	}
 	attemptID, err := domain.NewID()
 	if err != nil {
@@ -340,20 +340,20 @@ func (s *MemoryStore) validateNewAction(action domain.ActionRecord, execution do
 		action.Status != domain.ActionStatusPending || action.AttemptCount != 0 || action.Result != nil || action.LastError != nil ||
 		strings.TrimSpace(action.HandlerVersion) == "" || strings.TrimSpace(action.IdempotencyKey) == "" ||
 		action.MaxAttempts == 0 || action.ResultEventID == "" {
-		return fmt.Errorf("action %s 初始记录或关联无效: %w", action.Request.ID, ErrStoreConflict)
+		return fmt.Errorf("action %s初始记录或关联无效: %w", action.Request.ID, ErrStoreConflict)
 	}
 	if action.RecoveryPolicy != domain.RecoveryPolicyManual && action.RecoveryPolicy != domain.RecoveryPolicySafeRetry {
-		return fmt.Errorf("action %s 恢复策略无效: %w", action.Request.ID, ErrStoreConflict)
+		return fmt.Errorf("action %s恢复策略无效: %w", action.Request.ID, ErrStoreConflict)
 	}
 	if _, exists := s.actions[action.Request.ID]; exists {
-		return fmt.Errorf("action %s 已存在: %w", action.Request.ID, ErrStoreConflict)
+		return fmt.Errorf("action %s已存在: %w", action.Request.ID, ErrStoreConflict)
 	}
 	if _, exists := s.events[action.ResultEventID]; exists {
-		return fmt.Errorf("action结果event %s 已存在: %w", action.ResultEventID, ErrStoreConflict)
+		return fmt.Errorf("action结果event %s已存在: %w", action.ResultEventID, ErrStoreConflict)
 	}
 	for _, saved := range s.actions {
 		if saved.ResultEventID == action.ResultEventID {
-			return fmt.Errorf("action结果event %s 已保留: %w", action.ResultEventID, ErrStoreConflict)
+			return fmt.Errorf("action结果event %s已保留: %w", action.ResultEventID, ErrStoreConflict)
 		}
 	}
 	return nil
@@ -363,7 +363,7 @@ func validateStoredFailure(failure domain.Failure) error {
 	switch failure.Kind {
 	case domain.ErrorKindBusiness, domain.ErrorKindRuntime, domain.ErrorKindInterrupted, domain.ErrorKindUnknown:
 	default:
-		return fmt.Errorf("failure种类无效 %q", failure.Kind)
+		return fmt.Errorf("failure种类无效%q", failure.Kind)
 	}
 	_, err := codec.Encode(failure)
 	return err
@@ -441,10 +441,10 @@ func (s *MemoryStore) ClaimAction(ctx context.Context, actionID domain.ID) (*Act
 	}
 	if action.Status != domain.ActionStatusPending &&
 		!(action.Status == domain.ActionStatusUnknown && action.RecoveryPolicy == domain.RecoveryPolicySafeRetry) {
-		return nil, fmt.Errorf("action %s 不可领取: %w", actionID, ErrStoreConflict)
+		return nil, fmt.Errorf("action %s不可领取: %w", actionID, ErrStoreConflict)
 	}
 	if action.AttemptCount >= action.MaxAttempts || action.AttemptCount == math.MaxUint64 {
-		return nil, fmt.Errorf("action %s 已达到尝试上限: %w", actionID, ErrStoreConflict)
+		return nil, fmt.Errorf("action %s已达到尝试上限: %w", actionID, ErrStoreConflict)
 	}
 	attemptID, err := domain.NewID()
 	if err != nil {
