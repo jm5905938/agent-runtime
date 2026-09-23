@@ -32,6 +32,19 @@ func (r *AgentRegistry) Register(agent *domain.AgentInstance) error {
 	return nil
 }
 
+func (r *AgentRegistry) Cache(
+	agent *domain.AgentInstance,
+) {
+	if agent == nil {
+		return
+	}
+
+	owned := *agent
+	owned.State = cloneMap(agent.State)
+
+	r.agents[owned.ID] = &owned
+}
+
 // real
 func (r *AgentRegistry) getMutable(
 	agentID domain.ID,

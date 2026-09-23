@@ -30,47 +30,82 @@ type Runtime struct {
 	pendingActions []pendingAction
 	agentLocks     map[domain.ID]*sync.Mutex
 	drainMu        sync.Mutex
+	store          AgentStore
 }
 
-func NewRuntime() *Runtime {
-	return &Runtime{registry: NewAgentRegistry(), executor: NewExecutor(), runners: make(map[domain.ID]AgentRunner), executions: make(map[domain.ID]domain.Execution), actions: make(map[domain.ID]domain.Action), agentLocks: make(map[domain.ID]*sync.Mutex)}
+type AgentStore interface {
+	CreateAgent(agent domain.AgentInstance) error
+	GetAgent(id domain.ID) (domain.AgentInstance, error)
+}
+
+func NewRuntime(stores ...AgentStore) *Runtime {
+	var store AgentStore
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+
+	return &Runtime{
+		registry: NewAgentRegistry(),
+		store:    store,
+		executor: NewExecutor(),
+
+		runners:    make(map[domain.ID]AgentRunner),
+		executions: make(map[domain.ID]domain.Execution),
+		actions:    make(map[domain.ID]domain.Action),
+		agentLocks: make(map[domain.ID]*sync.Mutex),
+	}
 }
 
 // Executor 返回 Runtime 使用的 Action 执行器，以便调用方注册能力。
 func (r *Runtime) Executor() *Executor { return r.executor }
 
-// Register 保存 Agent 和它的业务实现。新 Agent 会自动从 created 进入 active。
 func (r *Runtime) Register(
 	agent *domain.AgentInstance,
 	runner AgentRunner,
 ) error {
-	if runner == nil {
-		return fmt.Errorf("注册 Agent: runner 不能为空")
+	if agent == nil {
+		return fmt.Errorf("register agent: agent is nil")
 	}
+
+	if runner == nil {
+		return fmt.Errorf("register agent: runner is nil")
+	}
+
+	// 使用副本，避免修改调用方传入的 Agent。
+	candidate := cloneAgent(*agent)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if err := r.registry.Register(agent); err != nil {
-		return err
+	// 注册前先检查 Registry 中是否已有同一个 Agent。
+	if _, err := r.registry.Get(candidate.ID); err == nil {
+		return fmt.Errorf("agent %s already exists", candidate.ID)
 	}
 
-	stored, err := r.registry.getMutable(agent.ID)
-	if err != nil {
-		return err
-	}
-
-	r.runners[agent.ID] = runner
-	r.agentLocks[agent.ID] = &sync.Mutex{}
-
-	if stored.Status == domain.AgentStatusCreated {
+	// 新 Agent 完成 created -> active 生命周期转换。
+	if candidate.Status == domain.AgentStatusCreated {
 		if err := r.lifecycle.Transition(
-			stored,
+			&candidate,
 			domain.AgentStatusActive,
 		); err != nil {
 			return err
 		}
 	}
+
+	// 配置 Storage 时，先写入数据库。
+	if r.store != nil {
+		if err := r.store.CreateAgent(candidate); err != nil {
+			return err
+		}
+	}
+
+	// 数据库写入成功后，再放入 Registry 缓存。
+	if err := r.registry.Register(&candidate); err != nil {
+		return err
+	}
+
+	r.runners[candidate.ID] = runner
+	r.agentLocks[candidate.ID] = &sync.Mutex{}
 
 	return nil
 }
@@ -79,6 +114,30 @@ func (r *Runtime) Register(
 func (r *Runtime) Agent(
 	agentID domain.ID,
 ) (AgentSnapshot, error) {
+	r.mu.Lock()
+	store := r.store
+	r.mu.Unlock()
+
+	// 配置了 Storage 时，数据库是查询优先级更高的数据源。
+	if store != nil {
+		loaded, err := store.GetAgent(agentID)
+		if err != nil {
+			return AgentSnapshot{}, err
+		}
+
+		r.mu.Lock()
+		r.registry.Cache(&loaded)
+		r.mu.Unlock()
+
+		return AgentSnapshot{
+			ID:     loaded.ID,
+			Name:   loaded.Name,
+			Status: loaded.Status,
+			State:  cloneMap(loaded.State),
+		}, nil
+	}
+
+	// 没有 Storage 时，继续使用原来的内存模式。
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

@@ -1,9 +1,13 @@
 package runtime
 
 import (
-	"agent-runtime/runtime/domain"
 	"errors"
+	"path/filepath"
 	"testing"
+
+	dbRuntime "agent-runtime/runtime"
+	"agent-runtime/runtime/domain"
+	"agent-runtime/storage"
 )
 
 type functionRunner func(ExecutionContext) (ExecutionResult, error)
@@ -256,6 +260,75 @@ func TestLifecycleRejectsIllegalTransition(t *testing.T) {
 		t.Fatalf(
 			"status changed to %s",
 			agent.Status,
+		)
+	}
+}
+
+func TestAgentCanBeRecoveredAfterRuntimeRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "runtime.db")
+
+	db1, err := dbRuntime.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("open first database: %v", err)
+	}
+
+	if err := storage.RunMigrations(db1); err != nil {
+		db1.Close()
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	store1 := storage.NewAgentStore(db1)
+	runtime1 := NewRuntime(store1)
+
+	agent := domain.NewAgentInstance("counter")
+	agent.State["count"] = 3
+
+	if err := runtime1.Register(
+		&agent,
+		functionRunner(func(ExecutionContext) (ExecutionResult, error) {
+			return ExecutionResult{}, nil
+		}),
+	); err != nil {
+		db1.Close()
+		t.Fatalf("register agent: %v", err)
+	}
+
+	db1.Close()
+
+	db2, err := dbRuntime.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("reopen database: %v", err)
+	}
+	defer db2.Close()
+
+	store2 := storage.NewAgentStore(db2)
+	runtime2 := NewRuntime(store2)
+
+	snapshot, err := runtime2.Agent(agent.ID)
+	if err != nil {
+		t.Fatalf("recover agent: %v", err)
+	}
+
+	if snapshot.ID != agent.ID {
+		t.Fatalf("id = %q, want %q", snapshot.ID, agent.ID)
+	}
+
+	if snapshot.Name != "counter" {
+		t.Fatalf("name = %q, want counter", snapshot.Name)
+	}
+
+	if snapshot.Status != domain.AgentStatusActive {
+		t.Fatalf(
+			"status = %q, want %q",
+			snapshot.Status,
+			domain.AgentStatusActive,
+		)
+	}
+
+	if snapshot.State["count"] != float64(3) {
+		t.Fatalf(
+			"count = %#v, want 3",
+			snapshot.State["count"],
 		)
 	}
 }

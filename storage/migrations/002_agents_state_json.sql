@@ -1,0 +1,1 @@
+ALTER TABLE agents RENAME COLUMN state TO state_json;

@@ -24,44 +24,66 @@ func RunMigrations(db *sql.DB) error {
 		return err
 	}
 
-	var version int
-	err := db.QueryRow(`
-	SELECT version
-	FROM schema_migrations
-	WHERE version = 1
-	`).Scan(&version)
-
-	if err == nil {
-		return nil
+	migrations := []struct {
+		version  int
+		filename string
+	}{
+		{
+			version:  1,
+			filename: "migrations/001_initial.sql",
+		},
+		{
+			version:  2,
+			filename: "migrations/002_agents_state_json.sql",
+		},
 	}
 
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
+	for _, migration := range migrations {
+		var exists int
+
+		err := db.QueryRow(`
+			SELECT 1
+			FROM schema_migrations
+			WHERE version = ?
+		`, migration.version).Scan(&exists)
+
+		if err == nil {
+			continue
+		}
+
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
+		sqlBytes, err := migrationFiles.ReadFile(
+			migration.filename,
+		)
+		if err != nil {
+			return err
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(string(sqlBytes)); err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		if _, err := tx.Exec(`
+			INSERT INTO schema_migrations (version)
+			VALUES (?)
+		`, migration.version); err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 
-	sqlBytes, err := migrationFiles.ReadFile(
-		"migrations/001_initial.sql",
-	)
-	if err != nil {
-		return err
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(string(sqlBytes)); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec(`
-	INSERT INTO schema_migrations (version)
-	VALUES (1)
-	`); err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	return nil
 }
