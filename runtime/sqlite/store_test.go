@@ -2,26 +2,12 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
 
 	"agent-runtime/core"
 )
-
-func TestNewBackend(t *testing.T) {
-	db := &sql.DB{}
-	backend := NewBackend(db, "test.db")
-
-	if backend.DB() != db {
-		t.Fatal("backend did not retain database")
-	}
-
-	if backend.Path() != "test.db" {
-		t.Fatalf("path = %q, want test.db", backend.Path())
-	}
-}
 
 func TestOpen(t *testing.T) {
 	backend, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -31,7 +17,7 @@ func TestOpen(t *testing.T) {
 	defer backend.Close()
 
 	var foreignKeys int
-	if err := backend.DB().QueryRow(
+	if err := backend.db.QueryRow(
 		"PRAGMA foreign_keys",
 	).Scan(&foreignKeys); err != nil {
 		t.Fatalf("read foreign_keys: %v", err)
@@ -42,7 +28,7 @@ func TestOpen(t *testing.T) {
 	}
 
 	var busyTimeout int
-	if err := backend.DB().QueryRow(
+	if err := backend.db.QueryRow(
 		"PRAGMA busy_timeout",
 	).Scan(&busyTimeout); err != nil {
 		t.Fatalf("read busy_timeout: %v", err)
@@ -61,7 +47,7 @@ func TestOpenRunsMigrations(t *testing.T) {
 	defer backend.Close()
 
 	var count int
-	if err := backend.DB().QueryRow(`
+	if err := backend.db.QueryRow(`
 	SELECT COUNT(*) 
 	FROM schema_migrations
 	WHERE version = 1
@@ -74,7 +60,7 @@ func TestOpenRunsMigrations(t *testing.T) {
 	}
 
 	var tableName string
-	if err := backend.DB().QueryRow(`
+	if err := backend.db.QueryRow(`
 	SELECT name 
 	FROM sqlite_master
 	WHERE type = 'table' AND name = 'agents'

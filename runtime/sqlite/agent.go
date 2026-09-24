@@ -19,8 +19,8 @@ func validateAgent(
 		return fmt.Errorf("agent id must not be empty")
 	}
 
-	if strings.TrimSpace(agent.Name) == "" {
-		return fmt.Errorf("agent name must not be empty")
+	if _, err := codec.Encode(agent); err != nil {
+		return fmt.Errorf("agent记录无效: %w", err)
 	}
 
 	if err := agent.Definition.Validate(); err != nil {
@@ -42,9 +42,6 @@ func validateAgent(
 func encodeAgentState(
 	state map[string]any,
 ) ([]byte, error) {
-	if state == nil {
-		state = make(map[string]any)
-	}
 
 	encoded, err := codec.Encode(state)
 	if err != nil {
@@ -61,9 +58,11 @@ func (s *Session) CreateAgent(
 	ctx context.Context,
 	agent domain.AgentInstance,
 ) error {
-	if err := s.guard(ctx, true); err != nil {
+	if err := s.lock(ctx, true); err != nil {
 		return err
 	}
+
+	defer s.backend.unlock()
 
 	if err := validateAgent(agent); err != nil {
 		return err
@@ -146,9 +145,11 @@ func (s *Session) LoadAgent(
 	ctx context.Context,
 	agentID domain.ID,
 ) (*domain.AgentInstance, error) {
-	if err := s.guard(ctx, false); err != nil {
+	if err := s.lock(ctx, false); err != nil {
 		return nil, err
 	}
+
+	defer s.backend.unlock()
 
 	var agent domain.AgentInstance
 	var status string
@@ -213,6 +214,12 @@ func (s *Session) LoadAgent(
 
 	agent.Status = domain.AgentStatus(status)
 	agent.StateVersion = version
+	if strconv.FormatUint(version, 10) != stateVersion {
+		return nil, fmt.Errorf("state版本格式无效")
+	}
+	if err := validateAgent(agent); err != nil {
+		return nil, err
+	}
 
 	return &agent, nil
 }
@@ -220,10 +227,15 @@ func (s *Session) LoadAgent(
 func (s *Session) ListAgents(
 	ctx context.Context,
 ) ([]domain.AgentInstance, error) {
-	if err := s.guard(ctx, false); err != nil {
+	if err := s.lock(ctx, false); err != nil {
 		return nil, err
 	}
 
+	defer s.backend.unlock()
+	return s.listAgents(ctx)
+}
+
+func (s *Session) listAgents(ctx context.Context) ([]domain.AgentInstance, error) {
 	rows, err := s.backend.db.QueryContext(ctx, `
 		SELECT
 			id,
@@ -291,6 +303,12 @@ func (s *Session) ListAgents(
 
 		agent.Status = domain.AgentStatus(status)
 		agent.StateVersion = version
+		if strconv.FormatUint(version, 10) != stateVersion {
+			return nil, fmt.Errorf("state版本格式无效")
+		}
+		if err := validateAgent(agent); err != nil {
+			return nil, err
+		}
 		result = append(result, agent)
 	}
 

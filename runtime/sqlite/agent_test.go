@@ -253,3 +253,45 @@ func TestAgentSurvivesRestart(t *testing.T) {
 		)
 	}
 }
+
+func TestAgentStateMatchesMemoryBoundary(t *testing.T) {
+	b := openTestBackend(t)
+	s := openTestSession(t, b)
+	ctx := context.Background()
+	if _, err := s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []map[string]any{nil, {}, {"nested": map[string]any{"n": json.Number("1.25")}}} {
+		agent := testAgent()
+		agent.Name = ""
+		agent.State = state
+		if err := s.CreateAgent(ctx, agent); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := s.LoadAgent(ctx, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (loaded.State == nil) != (state == nil) {
+			t.Fatal("null与空对象被混淆")
+		}
+		if nested, ok := loaded.State["nested"].(map[string]any); ok {
+			nested["n"] = false
+			again, err := s.LoadAgent(ctx, agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.State["nested"].(map[string]any)["n"] != json.Number("1.25") {
+				t.Fatal("查询结果影响了保存数据")
+			}
+		}
+	}
+	invalid := testAgent()
+	invalid.Name = string([]byte{0xff})
+	if err := s.CreateAgent(ctx, invalid); err == nil {
+		t.Fatal("非法utf-8已写入")
+	}
+	if _, err := s.LoadAgent(ctx, invalid.ID); !errors.Is(err, core.ErrStoreNotFound) {
+		t.Fatal(err)
+	}
+}
