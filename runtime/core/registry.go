@@ -1,6 +1,7 @@
-package runtime
+package core
 
 import (
+	"agent-runtime/codec"
 	"agent-runtime/domain"
 	"fmt"
 )
@@ -17,18 +18,23 @@ func NewAgentRegistry() *AgentRegistry {
 
 func (r *AgentRegistry) Register(agent *domain.AgentInstance) error {
 	if agent == nil {
-		return fmt.Errorf("注册 Agent: Agent 不能为空")
+		return fmt.Errorf("注册agent: agent不能为空")
+	}
+	if agent.ID == "" {
+		return fmt.Errorf("注册agent: id不能为空")
+	}
+	if _, err := codec.Encode(agent); err != nil {
+		return fmt.Errorf("注册agent记录: %w", err)
 	}
 
 	if _, exists := r.agents[agent.ID]; exists {
-		return fmt.Errorf("Agent %s 已存在", agent.ID)
+		return fmt.Errorf("agent %s已存在", agent.ID)
 	}
 
 	owned := *agent
 	owned.State = cloneMap(agent.State)
 
 	r.agents[owned.ID] = &owned
-
 	return nil
 }
 
@@ -38,9 +44,8 @@ func (r *AgentRegistry) getMutable(
 ) (*domain.AgentInstance, error) {
 	agent, exists := r.agents[agentID]
 	if !exists {
-		return nil, fmt.Errorf("找不到 Agent %s", agentID)
+		return nil, fmt.Errorf("找不到agent %s", agentID)
 	}
-
 	return agent, nil
 }
 
@@ -52,21 +57,19 @@ func (r *AgentRegistry) Get(
 	if err != nil {
 		return AgentSnapshot{}, err
 	}
+	return snapshotAgent(*agent), nil
+}
 
-	return AgentSnapshot{
-		ID:     agent.ID,
-		Name:   agent.Name,
-		Status: agent.Status,
-		State:  cloneMap(agent.State),
-	}, nil
+func snapshotAgent(agent domain.AgentInstance) AgentSnapshot {
+	return AgentSnapshot{ID: agent.ID, Name: agent.Name, Definition: agent.Definition,
+		Status: agent.Status, State: cloneMap(agent.State), StateVersion: agent.StateVersion}
 }
 
 func (r *AgentRegistry) Remove(agentID domain.ID) error {
 	if _, exists := r.agents[agentID]; !exists {
-		return fmt.Errorf("删除时找不到 Agent %s", agentID)
+		return fmt.Errorf("删除时找不到agent %s", agentID)
 	}
 
 	delete(r.agents, agentID)
-
 	return nil
 }

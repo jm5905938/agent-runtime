@@ -2,9 +2,7 @@ package domain
 
 import "time"
 
-// Event 是发给 Agent 的一条消息。
-// 消息可以来自用户、定时器或其他程序。
-// Payload 是消息里带的数据，CreatedAt 是消息到达的时间。
+//发给agent的消息
 type Event struct {
 	ID        ID             `json:"id"`
 	Type      string         `json:"type"`
@@ -12,7 +10,7 @@ type Event struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
-// NewEvent 创建一条新消息，并自动生成编号和创建时间。
+//创建消息，生成id和时间
 func NewEvent(eventType string, payload map[string]any) Event {
 	return Event{
 		ID:        mustNewID(),

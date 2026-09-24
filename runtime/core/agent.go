@@ -1,31 +1,46 @@
-// Package runtime 实现 Agent 运行时的内存版本。
-//
-// 这个包负责“怎么运行”，domain 包负责“运行时有哪些数据”。
-package runtime
+//core负责运行流程，domain定义数据
+package core
 
-import "agent-runtime/domain"
+import (
+	"agent-runtime/domain"
+	"context"
+)
+
 //防止修改原agent
 type AgentSnapshot struct {
-	ID    domain.ID
-	Name  string
-	Status domain.AgentStatus
-	State map[string]any
+	ID           domain.ID            `json:"id"`
+	Name         string               `json:"name"`
+	Definition   domain.DefinitionRef `json:"definition"`
+	Status       domain.AgentStatus   `json:"status"`
+	State        map[string]any       `json:"state"`
+	StateVersion uint64               `json:"state_version"`
+	BindingError string               `json:"binding_error,omitempty"`
 }
 
-// ExecutionContext 是 Agent 处理一条事件时能看到的输入。
+//本轮执行的输入
 type ExecutionContext struct {
-	Agent AgentSnapshot
-	Event domain.Event
+	Agent       AgentSnapshot `json:"agent"`
+	Event       domain.Event  `json:"event"`
+	ExecutionID domain.ID     `json:"execution_id"`
+	AttemptID   domain.ID     `json:"attempt_id"`
 }
 
-// ExecutionResult 是一次 Agent 处理的输出。
-// StateUpdate 会合并回 Agent.State；Actions 会在状态提交成功后交给 Executor。
-type ExecutionResult struct {
-	StateUpdate map[string]any
-	Actions     []domain.Action
-}
+//本轮输出，状态提交后才执行action
+type ExecutionResult = domain.ExecutionResult
 
-// AgentRunner 是具体 Agent 必须实现的接口。
+//agent执行接口
 type AgentRunner interface {
 	Run(context ExecutionContext) (ExecutionResult, error)
+}
+
+//支持取消的runner，原有接口仍可使用
+type ContextAgentRunner interface {
+	AgentRunner
+	RunContext(context.Context, ExecutionContext) (ExecutionResult, error)
+}
+
+//适配层区分业务错误、运行错误和中断
+type RunnerFailure interface {
+	error
+	FailureKind() domain.ErrorKind
 }

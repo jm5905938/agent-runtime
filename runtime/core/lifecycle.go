@@ -1,11 +1,11 @@
-package runtime
+package core
 
 import (
 	"agent-runtime/domain"
 	"fmt"
 )
 
-// LifecycleManager 检查并执行 Agent 的生命周期转换。
+//agent生命周期转换
 type LifecycleManager struct{}
 
 var allowedTransitions = map[domain.AgentStatus]map[domain.AgentStatus]bool{
@@ -16,13 +16,13 @@ var allowedTransitions = map[domain.AgentStatus]map[domain.AgentStatus]bool{
 	domain.AgentStatusTerminated:  {},
 }
 
-// Transition 将 agent 切换到 target。非法转换不会修改原状态。
+//切换状态，非法转换保持原状
 func (LifecycleManager) Transition(agent *domain.AgentInstance, target domain.AgentStatus) error {
 	if agent == nil {
-		return fmt.Errorf("切换 Agent 生命周期: Agent 不能为空")
+		return fmt.Errorf("切换agent生命周期: agent不能为空")
 	}
 	if !allowedTransitions[agent.Status][target] {
-		return fmt.Errorf("不能从 %s 切换到 %s", agent.Status, target)
+		return fmt.Errorf("不能从%s切换到%s", agent.Status, target)
 	}
 	agent.Status = target
 	return nil

@@ -1,7 +1,27 @@
 package domain
 
-// AgentStatus 表示 Agent 现在能不能接收新工作。
-// 它描述的是 Agent 本身，不是某一次执行。
+import (
+	"fmt"
+	"strings"
+)
+
+type DefinitionRef struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
+
+func (d DefinitionRef) Validate() error {
+	if strings.TrimSpace(d.ID) == "" {
+		return fmt.Errorf("definition id不能为空")
+	}
+	if strings.TrimSpace(d.Version) == "" {
+		return fmt.Errorf("definition version不能为空")
+	}
+	return nil
+}
+
+//agent生命周期状态
+
 type AgentStatus string
 
 const (
@@ -12,18 +32,17 @@ const (
 	AgentStatusTerminated  AgentStatus = "terminated"
 )
 
-// AgentInstance 就是一个 Agent。
-// 它有自己的编号、名字、当前状态和记忆（State）。
-// 不同 Agent 可以在 State 中保存不同的数据。
+//agent实例及其状态
 type AgentInstance struct {
-	ID     ID             `json:"id"`
-	Name   string         `json:"name"`
-	Status AgentStatus    `json:"status"`
-	State  map[string]any `json:"state"`
+	ID           ID             `json:"id"`
+	Name         string         `json:"name"`
+	Definition   DefinitionRef  `json:"definition"`
+	Status       AgentStatus    `json:"status"`
+	State        map[string]any `json:"state"`
+	StateVersion uint64         `json:"state_version"`
 }
 
-// NewAgentInstance 创建一个新的 Agent。
-// 新 Agent 一开始是 Created，注册成功后通常会变成 Active。
+//创建agent，初始状态为created
 func NewAgentInstance(name string) AgentInstance {
 	return AgentInstance{
 		ID:     mustNewID(),
