@@ -52,6 +52,7 @@ func runMigrations(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+
 	//旧分支也使用版本1，必须同时确认所需列存在
 	for _, query := range []string{
 		`SELECT id, name, definition_id, definition_version, status, state_json, state_version FROM agents LIMIT 0`,
@@ -67,4 +68,5 @@ func runMigrations(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return tx.Commit()
+
 }
