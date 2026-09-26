@@ -59,5 +59,35 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
+	if version < 2 {
+		content, err := migrationFiles.ReadFile(
+			"migrations/002_batch_b.sql",
+		)
+		if err != nil {
+			return fmt.Errorf("read migration 2: %w", err)
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration 2: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(string(content)); err != nil {
+			return fmt.Errorf("apply migration 2: %w", err)
+		}
+
+		if _, err := tx.Exec(`
+				INSERT INTO schema_migrations(version)
+				VALUES (2)
+			`); err != nil {
+			return fmt.Errorf("record migration 2: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration 2: %w", err)
+		}
+	}
+
 	return nil
 }
