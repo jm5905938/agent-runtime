@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"agent-runtime/codec"
@@ -184,5 +185,129 @@ func (s *Session) ReceiveEvent(
 			Status:      domain.DeliveryStatusPending,
 		},
 		Duplicate: false,
+	}, nil
+}
+
+// 读delivery
+func (s *Session) LoadDelivery(
+	ctx context.Context,
+	key domain.DeliveryKey,
+) (*domain.Delivery, error) {
+	var (
+		executionID string
+		status      string
+	)
+	err := s.backend.db.QueryRowContext(
+		ctx,
+		`SELECT execution_id, status FROM deliveries WHERE agent_id = ? AND event_id = ?`,
+		string(key.AgentID),
+		string(key.EventID),
+	).Scan(&executionID, &status)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, core.ErrStoreNotFound
+		}
+		return nil, err
+	}
+
+	return &domain.Delivery{
+		Key:         key,
+		ExecutionID: domain.ID(executionID),
+		Status:      domain.DeliveryStatus(status),
+	}, nil
+}
+
+// 选deliveries，按 receive_seq排列
+func (s *Session) ListDeliveries(
+	ctx context.Context,
+	statuses ...domain.DeliveryStatus,
+) ([]domain.Delivery, error) {
+	query := `SELECT agent_id, event_id, execution_id, status
+	          FROM deliveries`
+	args := []any{}
+
+	if len(statuses) > 0 {
+		placeholders := make([]string, len(statuses))
+		for i, st := range statuses {
+			placeholders[i] = "?"
+			args = append(args, string(st))
+		}
+		query += ` WHERE status IN (` + strings.Join(placeholders, ",") + `)`
+	}
+
+	query += ` ORDER BY receive_seq`
+
+	rows, err := s.backend.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []domain.Delivery
+	for rows.Next() {
+		var (
+			agentID     string
+			eventID     string
+			executionID string
+			status      string
+		)
+		if err := rows.Scan(&agentID, &eventID, &executionID, &status); err != nil {
+			return nil, err
+		}
+		result = append(result, domain.Delivery{
+			Key: domain.DeliveryKey{
+				AgentID: domain.ID(agentID),
+				EventID: domain.ID(eventID),
+			},
+			ExecutionID: domain.ID(executionID),
+			Status:      domain.DeliveryStatus(status),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// 读event
+func (s *Session) LoadEvent(
+	ctx context.Context,
+	eventID domain.ID,
+) (*domain.Event, error) {
+	var (
+		eventType     string
+		payloadJSON   string
+		createdAtText string
+	)
+	err := s.backend.db.QueryRowContext(
+		ctx,
+		`SELECT type, payload_json, created_at FROM events WHERE id = ?`,
+		string(eventID),
+	).Scan(&eventType, &payloadJSON, &createdAtText)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, core.ErrStoreNotFound
+		}
+		return nil, err
+	}
+
+	var payload map[string]any
+	if err := codec.Decode([]byte(payloadJSON), &payload); err != nil {
+		return nil, err
+	}
+
+	createdAt, err := time.Parse(time.RFC3339Nano, createdAtText)
+	if err != nil {
+		return nil, err
+	}
+
+	return &domain.Event{
+		ID:        eventID,
+		Type:      eventType,
+		Payload:   payload,
+		CreatedAt: createdAt,
 	}, nil
 }
