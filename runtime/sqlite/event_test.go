@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -15,15 +16,21 @@ func newTestSession(t *testing.T) (*Session, func()) {
 	t.Helper()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "test.db")
+	dir, err := os.MkdirTemp("", "sqlite-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "test.db")
 
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
+		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 
 	if err := RunMigrations(db); err != nil {
 		db.Close()
+		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 
@@ -31,18 +38,23 @@ func newTestSession(t *testing.T) (*Session, func()) {
 	session, err := backend.OpenSession(ctx)
 	if err != nil {
 		db.Close()
+		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 
 	if _, err := session.Recover(ctx); err != nil {
 		db.Close()
+		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 
 	cleanup := func() {
 		_ = session.Close(ctx)
-		_ = backend.Close()
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
 	}
+
+	t.Cleanup(cleanup)
 
 	return session, cleanup
 }
