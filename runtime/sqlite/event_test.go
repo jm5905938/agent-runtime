@@ -105,3 +105,57 @@ func TestReceiveEventNew(t *testing.T) {
 		t.Fatalf("execution id is empty")
 	}
 }
+
+func TestReceiveEventDuplicate(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t)
+
+	agent := domain.AgentInstance{
+		ID:     domain.ID("agent-1"),
+		Name:   "test",
+		Status: domain.AgentStatusActive,
+		Definition: domain.DefinitionRef{
+			ID:      "def-1",
+			Version: "v1",
+		},
+		State: map[string]any{},
+	}
+	if err := session.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+
+	event := domain.Event{
+		ID:      domain.ID("event-1"),
+		Type:    "test.event",
+		Payload: map[string]any{"a": 1},
+	}
+
+	first, err := session.ReceiveEvent(ctx, agent.ID, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Duplicate {
+		t.Fatalf("first receive should not be duplicate")
+	}
+	firstExecutionID := first.Delivery.ExecutionID
+
+	// 再次投递同一 event
+	second, err := session.ReceiveEvent(ctx, agent.ID, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.Duplicate {
+		t.Fatalf("second receive should be duplicate")
+	}
+	if second.Delivery.ExecutionID != firstExecutionID {
+		t.Fatalf("execution id changed: got %s want %s",
+			second.Delivery.ExecutionID, firstExecutionID)
+	}
+	if second.Delivery.Key != first.Delivery.Key {
+		t.Fatalf("delivery key changed")
+	}
+	if second.Delivery.Status != first.Delivery.Status {
+		t.Fatalf("delivery status changed: got %s want %s",
+			second.Delivery.Status, first.Delivery.Status)
+	}
+}

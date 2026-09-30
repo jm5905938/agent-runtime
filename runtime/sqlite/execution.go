@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -301,6 +302,16 @@ func (s *Session) ClaimExecution(
 	} else {
 		// execution存在
 		executionID = domain.ID(existingExecutionID)
+
+		_, err = tx.ExecContext(
+			ctx,
+			`UPDATE executions SET status = ?, started_at = NULL, finished_at = NULL, error = NULL, result_json = NULL WHERE id = ?`,
+			string(domain.ExecutionStatusRunning),
+			string(executionID),
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 读attempt_count
@@ -474,6 +485,14 @@ func (s *Session) CommitExecution(
 	ctx context.Context,
 	commit core.ExecutionCommit,
 ) (domain.ExecutionResult, error) {
+	if err := s.guard(ctx, true); err != nil {
+		return domain.ExecutionResult{}, err
+	}
+
+	if len(commit.Actions) != 0 {
+		return domain.ExecutionResult{}, fmt.Errorf("sqlite: CommitExecution with actions not supported yet.")
+	}
+
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.ExecutionResult{}, err
@@ -673,13 +692,22 @@ func (s *Session) CommitExecution(
 		return domain.ExecutionResult{}, err
 	}
 
-	return result, nil
+	var storedResult domain.ExecutionResult
+	if err := codec.Decode([]byte(resultJSON), &storedResult); err != nil {
+		return domain.ExecutionResult{}, err
+	}
+
+	return storedResult, nil
 }
 
 func (s *Session) FailExecution(
 	ctx context.Context,
 	failure core.ExecutionFailure,
 ) error {
+	if err := s.guard(ctx, true); err != nil {
+		return err
+	}
+
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -813,6 +841,10 @@ func (s *Session) RequeueDelivery(
 	ctx context.Context,
 	key domain.DeliveryKey,
 ) error {
+	if err := s.guard(ctx, true); err != nil {
+		return err
+	}
+
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

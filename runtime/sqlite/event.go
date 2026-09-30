@@ -17,6 +17,10 @@ func (s *Session) ReceiveEvent(
 	agentID domain.ID,
 	event domain.Event,
 ) (core.ReceivedEvent, error) {
+	if err := s.guard(ctx, true); err != nil {
+		return core.ReceivedEvent{}, err
+	}
+
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return core.ReceivedEvent{}, err
@@ -105,7 +109,7 @@ func (s *Session) ReceiveEvent(
 
 	if err == nil {
 		// 已存在
-		if err == nil {
+		if err := tx.Commit(); err != nil {
 			return core.ReceivedEvent{}, err
 		}
 		return core.ReceivedEvent{
@@ -193,6 +197,10 @@ func (s *Session) LoadDelivery(
 	ctx context.Context,
 	key domain.DeliveryKey,
 ) (*domain.Delivery, error) {
+	if err := s.guard(ctx, false); err != nil {
+		return nil, err
+	}
+
 	var (
 		executionID string
 		status      string
@@ -223,6 +231,10 @@ func (s *Session) ListDeliveries(
 	ctx context.Context,
 	statuses ...domain.DeliveryStatus,
 ) ([]domain.Delivery, error) {
+	if err := s.guard(ctx, false); err != nil {
+		return nil, err
+	}
+
 	query := `SELECT agent_id, event_id, execution_id, status
 	          FROM deliveries`
 	args := []any{}
@@ -276,6 +288,10 @@ func (s *Session) LoadEvent(
 	ctx context.Context,
 	eventID domain.ID,
 ) (*domain.Event, error) {
+	if err := s.guard(ctx, false); err != nil {
+		return nil, err
+	}
+
 	var (
 		eventType     string
 		payloadJSON   string

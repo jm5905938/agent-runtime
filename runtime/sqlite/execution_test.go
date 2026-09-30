@@ -126,7 +126,7 @@ func TestCommitExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.StateUpdate["count"] != 1 {
+	if got, ok := result.StateUpdate["count"].(json.Number); !ok || got.String() != "1" {
 		t.Fatalf("result count mismatch: %v", result.StateUpdate["count"])
 	}
 
@@ -496,5 +496,107 @@ func TestClaimExecutionConcurrent(t *testing.T) {
 	}
 	if success != 1 {
 		t.Fatalf("expected exactly 1 success, got %d", success)
+	}
+}
+
+func TestExecutionRetryCommit(t *testing.T) {
+	ctx := context.Background()
+	session, _ := newTestSession(t)
+
+	agent := domain.AgentInstance{
+		ID:     domain.ID("agent-1"),
+		Name:   "test",
+		Status: domain.AgentStatusActive,
+		Definition: domain.DefinitionRef{
+			ID:      "def-1",
+			Version: "v1",
+		},
+		State: map[string]any{"count": 0},
+	}
+	if err := session.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+
+	event := domain.Event{
+		ID:      domain.ID("event-1"),
+		Type:    "test.event",
+		Payload: map[string]any{},
+	}
+	if _, err := session.ReceiveEvent(ctx, agent.ID, event); err != nil {
+		t.Fatal(err)
+	}
+
+	key := domain.DeliveryKey{AgentID: agent.ID, EventID: event.ID}
+
+	// claim 1
+	claim1, err := session.ClaimExecution(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fail
+	failure := core.ExecutionFailure{
+		Token: claim1.Token,
+		Failure: domain.Failure{
+			Kind:    domain.ErrorKind("test"),
+			Message: "boom",
+		},
+	}
+	if err := session.FailExecution(ctx, failure); err != nil {
+		t.Fatal(err)
+	}
+
+	// requeue
+	if err := session.RequeueDelivery(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+
+	// claim 2
+	claim2, err := session.ClaimExecution(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim2.Token.ExecutionID != claim1.Token.ExecutionID {
+		t.Fatalf("execution id changed on retry")
+	}
+	if claim2.Attempt.Number != 2 {
+		t.Fatalf("attempt number mismatch: got %d want 2", claim2.Attempt.Number)
+	}
+
+	// commit 2
+	result, err := session.CommitExecution(ctx, core.ExecutionCommit{
+		Token:       claim2.Token,
+		StateUpdate: map[string]any{"count": 1},
+	})
+	if err != nil {
+		t.Fatalf("commit after retry failed: %v", err)
+	}
+	if got, ok := result.StateUpdate["count"].(json.Number); !ok || got.String() != "1" {
+		t.Fatalf("result count mismatch: %v", result.StateUpdate["count"])
+	}
+
+	// 确认 agent state 更新
+	loaded, err := session.LoadAgent(ctx, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.StateVersion != agent.StateVersion+1 {
+		t.Fatalf("state version mismatch: got %d want %d",
+			loaded.StateVersion, agent.StateVersion+1)
+	}
+
+	// 确认 attempt 历史有 2 条
+	stored, err := session.LoadExecution(ctx, claim1.Token.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Attempts) != 2 {
+		t.Fatalf("attempt count mismatch: %d", len(stored.Attempts))
+	}
+	if stored.Attempts[0].Status != domain.AttemptStatusFailed {
+		t.Fatalf("attempt 1 status mismatch: %s", stored.Attempts[0].Status)
+	}
+	if stored.Attempts[1].Status != domain.AttemptStatusSucceeded {
+		t.Fatalf("attempt 2 status mismatch: %s", stored.Attempts[1].Status)
 	}
 }
