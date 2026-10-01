@@ -750,15 +750,20 @@ func (s *Session) FailExecution(
 	token := failure.Token
 
 	// 校验delivery
-	var deliveryStatus string
+	var (
+		deliveryExecutionID string
+		deliveryStatus      string
+	)
+
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT status
+		`SELECT execution_id, status
 		 FROM deliveries
 		 WHERE agent_id = ? AND event_id = ?`,
 		string(token.Delivery.AgentID),
 		string(token.Delivery.EventID),
-	).Scan(&deliveryStatus)
+	).Scan(&deliveryExecutionID, &deliveryStatus)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return core.ErrStoreNotFound
@@ -767,6 +772,9 @@ func (s *Session) FailExecution(
 	}
 
 	if deliveryStatus != string(domain.DeliveryStatusRunning) {
+		return core.ErrStoreStaleClaim
+	}
+	if domain.ID(deliveryExecutionID) != token.ExecutionID {
 		return core.ErrStoreStaleClaim
 	}
 
@@ -781,7 +789,7 @@ func (s *Session) FailExecution(
 
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT e.status, a.status, a.number, a.attempt_count, a.expected_state_version
+		`SELECT e.status, a.status, a.number, e.attempt_count, a.expected_state_version
 		 FROM executions e
 		 JOIN execution_attempts a ON a.execution_id = e.id
 		 WHERE e.id = ?
