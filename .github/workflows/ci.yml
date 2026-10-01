@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: runtime/go.mod
+          cache-dependency-path: runtime/go.sum
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check formatting
+        working-directory: runtime
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            echo "The following files are not gofmt formatted:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Vet
+        working-directory: runtime
+        run: go vet ./...
+
+      - name: Go tests
+        working-directory: runtime
+        run: go test ./... -count=1
+
+      - name: Python tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python/src
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s python/tests -v
