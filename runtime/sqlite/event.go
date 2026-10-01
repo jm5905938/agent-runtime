@@ -17,19 +17,16 @@ func (s *Session) ReceiveEvent(
 	agentID domain.ID,
 	event domain.Event,
 ) (core.ReceivedEvent, error) {
-	if err := s.guard(ctx, true); err != nil {
+	if err := s.lock(ctx, true); err != nil {
 		return core.ReceivedEvent{}, err
 	}
+	defer s.backend.unlock()
 
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return core.ReceivedEvent{}, err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer tx.Rollback()
 
 	// agent是否存在
 	var exists int
@@ -52,18 +49,22 @@ func (s *Session) ReceiveEvent(
 		storedPayload string
 		storedCreated string
 	)
+	eventExists := false
+
 	err = tx.QueryRowContext(
 		ctx,
 		`SELECT type, payload_json, created_at FROM events WHERE id = ?`,
 		string(event.ID),
 	).Scan(&storedType, &storedPayload, &storedCreated)
 
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
+		eventExists = true
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return core.ReceivedEvent{}, err
 	}
 
 	// event比较
-	if err == nil {
+	if eventExists {
 		// event存在(比较type,payload)
 		var storedPayloadValue map[string]any
 
@@ -96,18 +97,18 @@ func (s *Session) ReceiveEvent(
 		storedExecutionID string
 		storedStatus      string
 	)
-	err = tx.QueryRowContext(
+	deliveryErr := tx.QueryRowContext(
 		ctx,
 		`SELECT execution_id, status FROM deliveries WHERE agent_id = ? AND event_id = ?`,
 		string(agentID),
 		string(event.ID),
 	).Scan(&storedExecutionID, &storedStatus)
 
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return core.ReceivedEvent{}, err
+	if deliveryErr != nil && !errors.Is(deliveryErr, sql.ErrNoRows) {
+		return core.ReceivedEvent{}, deliveryErr
 	}
 
-	if err == nil {
+	if deliveryErr == nil {
 		// 已存在
 		if err := tx.Commit(); err != nil {
 			return core.ReceivedEvent{}, err
@@ -123,7 +124,7 @@ func (s *Session) ReceiveEvent(
 	}
 
 	// event不存在
-	if errors.Is(err, sql.ErrNoRows) || storedType == "" {
+	if !eventExists {
 		encodedPayload, encErr := codec.Encode(event.Payload)
 		if encErr != nil {
 			return core.ReceivedEvent{}, encErr
@@ -197,9 +198,10 @@ func (s *Session) LoadDelivery(
 	ctx context.Context,
 	key domain.DeliveryKey,
 ) (*domain.Delivery, error) {
-	if err := s.guard(ctx, false); err != nil {
+	if err := s.lock(ctx, false); err != nil {
 		return nil, err
 	}
+	defer s.backend.unlock()
 
 	var (
 		executionID string
@@ -231,9 +233,10 @@ func (s *Session) ListDeliveries(
 	ctx context.Context,
 	statuses ...domain.DeliveryStatus,
 ) ([]domain.Delivery, error) {
-	if err := s.guard(ctx, false); err != nil {
+	if err := s.lock(ctx, false); err != nil {
 		return nil, err
 	}
+	defer s.backend.unlock()
 
 	query := `SELECT agent_id, event_id, execution_id, status
 	          FROM deliveries`
@@ -288,9 +291,10 @@ func (s *Session) LoadEvent(
 	ctx context.Context,
 	eventID domain.ID,
 ) (*domain.Event, error) {
-	if err := s.guard(ctx, false); err != nil {
+	if err := s.lock(ctx, false); err != nil {
 		return nil, err
 	}
+	defer s.backend.unlock()
 
 	var (
 		eventType     string

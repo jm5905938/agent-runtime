@@ -17,16 +17,21 @@ func (s *Session) LoadExecution(
 	ctx context.Context,
 	executionID domain.ID,
 ) (*core.StoredExecution, error) {
+	if err := s.lock(ctx, false); err != nil {
+		return nil, err
+	}
+	defer s.backend.unlock()
+
 	var (
-		agentID       string
-		eventID       string
-		status        string
-		createdAtText string
-		startedAtText sql.NullString
+		agentID        string
+		eventID        string
+		status         string
+		createdAtText  string
+		startedAtText  sql.NullString
 		finishedAtText sql.NullString
-		errorText     sql.NullString
-		attemptCount  string
-		resultJSON    sql.NullString
+		errorText      sql.NullString
+		attemptCount   string
+		resultJSON     sql.NullString
 	)
 	err := s.backend.db.QueryRowContext(
 		ctx,
@@ -125,10 +130,10 @@ func (s *Session) loadAttempts(
 	var result []domain.Attempt
 	for rows.Next() {
 		var (
-			id            string
-			numberText    string
-			status        string
-			startedAtText string
+			id             string
+			numberText     string
+			status         string
+			startedAtText  string
 			finishedAtText sql.NullString
 			failureJSON    sql.NullString
 		)
@@ -185,15 +190,16 @@ func (s *Session) ClaimExecution(
 	ctx context.Context,
 	key domain.DeliveryKey,
 ) (*core.ExecutionClaim, error) {
+	if err := s.lock(ctx, true); err != nil {
+		return nil, err
+	}
+	defer s.backend.unlock()
+
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer tx.Rollback()
 
 	// 查delivery
 	var (
@@ -220,12 +226,12 @@ func (s *Session) ClaimExecution(
 
 	// 查agent
 	var (
-		agentName          string
-		agentDefID         string
-		agentDefVersion    string
-		agentStatus        string
-		agentStateJSON     string
-		agentStateVersion  string
+		agentName         string
+		agentDefID        string
+		agentDefVersion   string
+		agentStatus       string
+		agentStateJSON    string
+		agentStateVersion string
 	)
 	err = tx.QueryRowContext(
 		ctx,
@@ -485,9 +491,10 @@ func (s *Session) CommitExecution(
 	ctx context.Context,
 	commit core.ExecutionCommit,
 ) (domain.ExecutionResult, error) {
-	if err := s.guard(ctx, true); err != nil {
+	if err := s.lock(ctx, true); err != nil {
 		return domain.ExecutionResult{}, err
 	}
+	defer s.backend.unlock()
 
 	if len(commit.Actions) != 0 {
 		return domain.ExecutionResult{}, fmt.Errorf("sqlite: CommitExecution with actions not supported yet.")
@@ -497,25 +504,33 @@ func (s *Session) CommitExecution(
 	if err != nil {
 		return domain.ExecutionResult{}, err
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	defer tx.Rollback()
 
 	token := commit.Token
 
 	// 校验delivery
-	var deliveryStatus string
+	var (
+		deliveryExecutionID string
+		deliveryStatus      string
+	)
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT status FROM deliveries WHERE agent_id = ? AND event_id = ?`,
+		`SELECT execution_id, status
+		 FROM deliveries
+		 WHERE agent_id = ? AND event_id = ?`,
 		string(token.Delivery.AgentID),
 		string(token.Delivery.EventID),
-	).Scan(&deliveryStatus)
+	).Scan(&deliveryExecutionID, &deliveryStatus)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.ExecutionResult{}, core.ErrStoreNotFound
 		}
 		return domain.ExecutionResult{}, err
+	}
+
+	if domain.ID(deliveryExecutionID) != token.ExecutionID {
+		return domain.ExecutionResult{}, core.ErrStoreStaleClaim
 	}
 
 	if deliveryStatus != string(domain.DeliveryStatusRunning) {
@@ -524,20 +539,34 @@ func (s *Session) CommitExecution(
 
 	// 校验execution,attempt
 	var (
-		executionStatus string
-		attemptStatus   string
-		attemptNumber   string
-		expectedVersion string
+		executionStatus   string
+		attemptStatus     string
+		attemptNumber     string
+		executionAttempts string
+		expectedVersion   string
 	)
+
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT e.status, a.status, a.number, a.expected_state_version
+		`SELECT e.status, a.status, a.number, e.attempt_count, a.expected_state_version
 		 FROM executions e
 		 JOIN execution_attempts a ON a.execution_id = e.id
-		 WHERE e.id = ? AND a.id = ?`,
+		 WHERE e.id = ?
+		   AND a.id = ?
+		   AND e.agent_id = ?
+		   AND e.event_id = ?`,
 		string(token.ExecutionID),
 		string(token.AttemptID),
-	).Scan(&executionStatus, &attemptStatus, &attemptNumber, &expectedVersion)
+		string(token.Delivery.AgentID),
+		string(token.Delivery.EventID),
+	).Scan(
+		&executionStatus,
+		&attemptStatus,
+		&attemptNumber,
+		&executionAttempts,
+		&expectedVersion,
+	)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.ExecutionResult{}, core.ErrStoreStaleClaim
@@ -549,6 +578,9 @@ func (s *Session) CommitExecution(
 		return domain.ExecutionResult{}, core.ErrStoreStaleClaim
 	}
 	if attemptStatus != string(domain.AttemptStatusRunning) {
+		return domain.ExecutionResult{}, core.ErrStoreStaleClaim
+	}
+	if attemptNumber != executionAttempts {
 		return domain.ExecutionResult{}, core.ErrStoreStaleClaim
 	}
 
@@ -704,17 +736,16 @@ func (s *Session) FailExecution(
 	ctx context.Context,
 	failure core.ExecutionFailure,
 ) error {
-	if err := s.guard(ctx, true); err != nil {
+	if err := s.lock(ctx, true); err != nil {
 		return err
 	}
+	defer s.backend.unlock()
 
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	defer tx.Rollback()
 
 	token := failure.Token
 
@@ -722,7 +753,9 @@ func (s *Session) FailExecution(
 	var deliveryStatus string
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT status FROM deliveries WHERE agent_id = ? AND event_id = ?`,
+		`SELECT status
+		 FROM deliveries
+		 WHERE agent_id = ? AND event_id = ?`,
 		string(token.Delivery.AgentID),
 		string(token.Delivery.EventID),
 	).Scan(&deliveryStatus)
@@ -739,19 +772,34 @@ func (s *Session) FailExecution(
 
 	// 校验execution, attempt
 	var (
-		executionStatus string
-		attemptStatus   string
-		expectedVersion string
+		executionStatus   string
+		attemptStatus     string
+		attemptNumber     string
+		executionAttempts string
+		expectedVersion   string
 	)
+
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT e.status, a.status, a.expected_state_version
+		`SELECT e.status, a.status, a.number, a.attempt_count, a.expected_state_version
 		 FROM executions e
 		 JOIN execution_attempts a ON a.execution_id = e.id
-		 WHERE e.id = ? AND a.id = ?`,
+		 WHERE e.id = ?
+		   AND a.id = ?
+		   AND e.agent_id = ?
+		   AND e.event_id = ?`,
 		string(token.ExecutionID),
 		string(token.AttemptID),
-	).Scan(&executionStatus, &attemptStatus, &expectedVersion)
+		string(token.Delivery.AgentID),
+		string(token.Delivery.EventID),
+	).Scan(
+		&executionStatus,
+		&attemptStatus,
+		&attemptNumber,
+		&executionAttempts,
+		&expectedVersion,
+	)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return core.ErrStoreStaleClaim
@@ -763,6 +811,9 @@ func (s *Session) FailExecution(
 		return core.ErrStoreStaleClaim
 	}
 	if attemptStatus != string(domain.AttemptStatusRunning) {
+		return core.ErrStoreStaleClaim
+	}
+	if attemptNumber != executionAttempts {
 		return core.ErrStoreStaleClaim
 	}
 
@@ -841,17 +892,16 @@ func (s *Session) RequeueDelivery(
 	ctx context.Context,
 	key domain.DeliveryKey,
 ) error {
-	if err := s.guard(ctx, true); err != nil {
+	if err := s.lock(ctx, true); err != nil {
 		return err
 	}
+	defer s.backend.unlock()
 
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	defer tx.Rollback()
 
 	var status string
 	err = tx.QueryRowContext(
