@@ -1,4 +1,4 @@
-//core负责运行流程，domain定义数据
+// core负责运行流程，domain定义数据
 package core
 
 import (
@@ -6,7 +6,7 @@ import (
 	"context"
 )
 
-//防止修改原agent
+// 防止修改原agent
 type AgentSnapshot struct {
 	ID           domain.ID            `json:"id"`
 	Name         string               `json:"name"`
@@ -17,7 +17,7 @@ type AgentSnapshot struct {
 	BindingError string               `json:"binding_error,omitempty"`
 }
 
-//本轮执行的输入
+// 本轮执行的输入
 type ExecutionContext struct {
 	Agent       AgentSnapshot `json:"agent"`
 	Event       domain.Event  `json:"event"`
@@ -25,21 +25,21 @@ type ExecutionContext struct {
 	AttemptID   domain.ID     `json:"attempt_id"`
 }
 
-//本轮输出，状态提交后才执行action
+// 本轮输出，状态提交后才执行action
 type ExecutionResult = domain.ExecutionResult
 
-//agent执行接口
+// agent执行接口
 type AgentRunner interface {
 	Run(context ExecutionContext) (ExecutionResult, error)
 }
 
-//支持取消的runner，原有接口仍可使用
+// 支持取消的runner，原有接口仍可使用
 type ContextAgentRunner interface {
 	AgentRunner
 	RunContext(context.Context, ExecutionContext) (ExecutionResult, error)
 }
 
-//适配层区分业务错误、运行错误和中断
+// 适配层区分业务错误、运行错误和中断
 type RunnerFailure interface {
 	error
 	FailureKind() domain.ErrorKind

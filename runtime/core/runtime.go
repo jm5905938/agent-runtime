@@ -18,7 +18,7 @@ var (
 	ErrExecutionFailed     = errors.New("execution失败")
 )
 
-//事件、action、结果事件的执行闭环
+// 事件、action、结果事件的执行闭环
 type Runtime struct {
 	store       StateStore
 	lifecycle   LifecycleManager
@@ -69,10 +69,10 @@ func isNilValue(value any) bool {
 	return false
 }
 
-//获取执行器以注册能力
+// 获取执行器以注册能力
 func (r *Runtime) Executor() *Executor { return r.executor }
 
-//保存agent与实现，新实例转为active
+// 保存agent与实现，新实例转为active
 func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) error {
 	done, err := r.enter()
 	if err != nil {
@@ -109,7 +109,7 @@ func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) erro
 	return nil
 }
 
-//agent只读快照
+// agent只读快照
 func (r *Runtime) Agent(agentID domain.ID) (AgentSnapshot, error) {
 	return r.AgentContext(context.Background(), agentID)
 }
@@ -133,7 +133,7 @@ func (r *Runtime) AgentContext(ctx context.Context, agentID domain.ID) (AgentSna
 	return snapshot, nil
 }
 
-//立即处理事件，同一agent不并行执行
+// 立即处理事件，同一agent不并行执行
 func (r *Runtime) Process(agentID domain.ID, event domain.Event) (ExecutionResult, error) {
 	return r.ProcessContext(context.Background(), agentID, event)
 }
@@ -317,7 +317,7 @@ type storeFailureError struct{ cause error }
 func (e *storeFailureError) Error() string { return e.cause.Error() }
 func (e *storeFailureError) Unwrap() error { return e.cause }
 
-//接收事件，事务提交后返回，等待调度
+// 接收事件，事务提交后返回，等待调度
 func (r *Runtime) Submit(agentID domain.ID, event domain.Event) error {
 	_, err := r.SubmitContext(context.Background(), agentID, event)
 	return err
@@ -348,7 +348,7 @@ func (r *Runtime) Retry(ctx context.Context, key domain.DeliveryKey) error {
 	return r.store.RequeueDelivery(ctx, key)
 }
 
-//按序处理事件和action，直到没有可执行工作
+// 按序处理事件和action，直到没有可执行工作
 func (r *Runtime) RunUntilIdle() error {
 	return r.RunUntilIdleContext(context.Background())
 }
@@ -430,7 +430,7 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 	}
 }
 
-//执行记录副本
+// 执行记录副本
 func (r *Runtime) Executions() map[domain.ID]domain.Execution {
 	result, _ := r.ExecutionsContext(context.Background())
 	return result
@@ -511,7 +511,7 @@ func validateEvent(event domain.Event) error {
 	return nil
 }
 
-//action记录副本
+// action记录副本
 func (r *Runtime) Actions() map[domain.ID]domain.Action {
 	result, _ := r.ActionsContext(context.Background())
 	return result
@@ -534,7 +534,7 @@ func (r *Runtime) ActionsContext(ctx context.Context) (map[domain.ID]domain.Acti
 	return result, nil
 }
 
-//action状态、结果和尝试记录
+// action状态、结果和尝试记录
 func (r *Runtime) ActionContext(ctx context.Context, actionID domain.ID) (*StoredAction, error) {
 	done, err := r.enter()
 	if err != nil {

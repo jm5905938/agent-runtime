@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-//本轮执行状态，与agent状态独立
+// 本轮执行状态，与agent状态独立
 type ExecutionStatus string
 
 const (
@@ -12,7 +12,7 @@ const (
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 )
 
-//agent处理一次投递的记录
+// agent处理一次投递的记录
 type Execution struct {
 	ID           ID               `json:"id"`
 	AgentID      ID               `json:"agent_id"`
@@ -31,7 +31,7 @@ type ExecutionResult struct {
 	Actions     []Action       `json:"actions"`
 }
 
-//创建待执行记录
+// 创建待执行记录
 func NewExecution(agentID, eventID ID) Execution {
 	return Execution{
 		ID:        mustNewID(),

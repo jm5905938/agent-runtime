@@ -13,7 +13,7 @@ import (
 	"agent-runtime/domain"
 )
 
-//内存事务，进程退出后数据丢失
+// 内存事务，进程退出后数据丢失
 type MemoryStore struct {
 	mu             sync.Mutex
 	agents         map[domain.ID]domain.AgentInstance
@@ -111,7 +111,7 @@ func validateStoredEvent(event domain.Event) error {
 	return nil
 }
 
-//准备事件，全部校验后统一保存
+// 准备事件，全部校验后统一保存
 func (s *MemoryStore) prepareEvent(agentID domain.ID, event domain.Event) (ReceivedEvent, domain.Event, error) {
 	if _, exists := s.agents[agentID]; !exists {
 		return ReceivedEvent{}, domain.Event{}, fmt.Errorf("agent %s: %w", agentID, ErrStoreNotFound)

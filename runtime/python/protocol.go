@@ -10,7 +10,7 @@ import (
 	"agent-runtime/domain"
 )
 
-//valid区分agent错误和协议交换故障
+// valid区分agent错误和协议交换故障
 func decodeResponse(data []byte, input core.ExecutionContext) (result core.ExecutionResult, err error, valid bool) {
 	invalid := func(message string) (core.ExecutionResult, error, bool) {
 		return core.ExecutionResult{}, failure(domain.ErrorKindRuntime, "python响应无效: "+message, nil), false

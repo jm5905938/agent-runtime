@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-//encoding/json会接受重复键和孤立的utf-16代理码位，此处拒绝两者，保证两种语言解释一致
+// encoding/json会接受重复键和孤立的utf-16代理码位，此处拒绝两者，保证两种语言解释一致
 func validateJSON(data []byte) error {
 	if !utf8.Valid(data) || !json.Valid(data) {
 		return errors.New("json或utf-8无效")

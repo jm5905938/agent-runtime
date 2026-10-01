@@ -32,7 +32,7 @@ const (
 	AgentStatusTerminated  AgentStatus = "terminated"
 )
 
-//agent实例及其状态
+// agent实例及其状态
 type AgentInstance struct {
 	ID           ID             `json:"id"`
 	Name         string         `json:"name"`
@@ -42,7 +42,7 @@ type AgentInstance struct {
 	StateVersion uint64         `json:"state_version"`
 }
 
-//创建agent，初始状态为created
+// 创建agent，初始状态为created
 func NewAgentInstance(name string) AgentInstance {
 	return AgentInstance{
 		ID:     mustNewID(),

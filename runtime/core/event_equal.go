@@ -17,7 +17,7 @@ func sameEventContent(a, b domain.Event) (bool, error) {
 	return sameJSONValue(a.Payload, b.Payload)
 }
 
-//按json比较，保留大整数精度
+// 按json比较，保留大整数精度
 func sameJSONValue(a, b any) (bool, error) {
 	decode := func(value any) (any, error) {
 		encoded, err := codec.Encode(value)
@@ -87,7 +87,7 @@ func equalDecodedJSON(a, b any) bool {
 	}
 }
 
-//分开保存系数和指数，避免展开巨大数值
+// 分开保存系数和指数，避免展开巨大数值
 func normalizedNumber(number json.Number) (string, string) {
 	mantissa, exponent, found := strings.Cut(strings.ToLower(string(number)), "e")
 	var power big.Int

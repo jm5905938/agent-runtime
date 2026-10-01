@@ -10,19 +10,19 @@ import (
 
 var ErrActionRequiresStore = errors.New("恢复runtime的action必须通过store执行")
 
-//外部能力接口
+// 外部能力接口
 type ActionHandler interface {
 	Execute(action domain.Action) (map[string]any, error)
 }
 
-//原样返回action数据
+// 原样返回action数据
 type EchoHandler struct{}
 
 func (EchoHandler) Execute(action domain.Action) (map[string]any, error) {
 	return cloneMap(action.Payload), nil
 }
 
-//执行action并生成结果事件，已完成的结果直接复用
+// 执行action并生成结果事件，已完成的结果直接复用
 type Executor struct {
 	runtime  *Runtime
 	mu       sync.Mutex

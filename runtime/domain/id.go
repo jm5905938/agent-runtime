@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-//字符串形式的唯一id
+// 字符串形式的唯一id
 type ID string
 
 func NewID() (ID, error) {
