@@ -57,10 +57,33 @@ func (s *Session) ReceiveEvent(
 		string(event.ID),
 	).Scan(&storedType, &storedPayload, &storedCreated)
 
-	if err != nil {
+	if err == nil {
+		// 有event
 		eventExists = true
 	} else if !errors.Is(err, sql.ErrNoRows) {
+		// 数据库错误
 		return core.ReceivedEvent{}, err
+	}
+
+	if !eventExists {
+		var reserved int
+
+		err = tx.QueryRowContext(
+			ctx,
+			`SELECT 1
+			 FROM actions
+			 WHERE result_event_id = ?`,
+			string(event.ID),
+		).Scan(&reserved)
+
+		if err == nil {
+			// 已经预留给Action结果
+			return core.ReceivedEvent{}, core.ErrStoreConflict
+		}
+
+		if !errors.Is(err, sql.ErrNoRows) {
+			return core.ReceivedEvent{}, err
+		}
 	}
 
 	// event比较

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -218,6 +217,11 @@ func (s *Session) ClaimExecution(
 			return nil, core.ErrStoreNotFound
 		}
 		return nil, err
+	}
+
+	if deliveryStatus == string(domain.DeliveryStatusFailed) {
+		// delivery失败，显式调用RequeueDelivery
+		return nil, core.ErrDeliveryFailed
 	}
 
 	if deliveryStatus != string(domain.DeliveryStatusPending) {
@@ -496,10 +500,6 @@ func (s *Session) CommitExecution(
 	}
 	defer s.backend.unlock()
 
-	if len(commit.Actions) != 0 {
-		return domain.ExecutionResult{}, fmt.Errorf("sqlite: CommitExecution with actions not supported yet.")
-	}
-
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.ExecutionResult{}, err
@@ -524,7 +524,7 @@ func (s *Session) CommitExecution(
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return domain.ExecutionResult{}, core.ErrStoreNotFound
+			return domain.ExecutionResult{}, core.ErrStoreStaleClaim
 		}
 		return domain.ExecutionResult{}, err
 	}
@@ -665,9 +665,16 @@ func (s *Session) CommitExecution(
 	}
 
 	// 构造result
+	var actionRequests []domain.Action
+	if commit.Actions != nil {
+		actionRequests = make([]domain.Action, 0, len(commit.Actions))
+		for _, action := range commit.Actions {
+			actionRequests = append(actionRequests, action.Request)
+		}
+	}
 	result := domain.ExecutionResult{
 		StateUpdate: commit.StateUpdate,
-		Actions:     nil,
+		Actions:     actionRequests,
 	}
 
 	resultJSON, err := codec.Encode(result)
@@ -676,6 +683,34 @@ func (s *Session) CommitExecution(
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	for _, action := range commit.Actions {
+		requestJSON, err := codec.Encode(action.Request)
+		if err != nil {
+			return domain.ExecutionResult{}, err
+		}
+
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO actions (id, execution_id, agent_id, request_json, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			string(action.Request.ID),
+			string(*action.Request.ExecutionID),
+			string(action.AgentID),
+			string(requestJSON),
+			action.HandlerVersion,
+			string(action.RecoveryPolicy),
+			action.IdempotencyKey,
+			strconv.FormatUint(action.MaxAttempts, 10),
+			string(domain.ActionStatusPending),
+			"0",
+			string(action.ResultEventID),
+		)
+
+		if err != nil {
+			return domain.ExecutionResult{}, err
+		}
+	}
 
 	// 更新execution
 	_, err = tx.ExecContext(
@@ -911,13 +946,14 @@ func (s *Session) RequeueDelivery(
 	}
 	defer tx.Rollback()
 
+	var executionID string
 	var status string
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT status FROM deliveries WHERE agent_id = ? AND event_id = ?`,
+		`SELECT execution_id, status FROM deliveries WHERE agent_id = ? AND event_id = ?`,
 		string(key.AgentID),
 		string(key.EventID),
-	).Scan(&status)
+	).Scan(&executionID, &status)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return core.ErrStoreNotFound
@@ -929,20 +965,46 @@ func (s *Session) RequeueDelivery(
 		return core.ErrStoreConflict
 	}
 
-	_, err = tx.ExecContext(
+	executionResult, err := tx.ExecContext(
 		ctx,
-		`UPDATE deliveries SET status = ? WHERE agent_id = ? AND event_id = ?`,
-		string(domain.DeliveryStatusPending),
-		string(key.AgentID),
-		string(key.EventID),
+		`UPDATE executions
+		 SET status = ?, started_at = NULL, finished_at = NULL, error = NULL, result_json = NULL
+		 WHERE id = ? AND status = ?`,
+		string(domain.ExecutionStatusPending),
+		executionID,
+		string(domain.ExecutionStatusFailed),
 	)
 	if err != nil {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
+	executionAffected, err := executionResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if executionAffected != 1 {
+		return core.ErrStoreConflict
+	}
+
+	deliveryResult, err := tx.ExecContext(
+		ctx,
+		`UPDATE deliveries SET status = ? WHERE agent_id = ? AND event_id = ? AND status = ?`,
+		string(domain.DeliveryStatusPending),
+		string(key.AgentID),
+		string(key.EventID),
+		string(domain.DeliveryStatusFailed),
+	)
+	if err != nil {
 		return err
 	}
 
-	return nil
+	deliveryAffected, err := deliveryResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deliveryAffected != 1 {
+		return core.ErrStoreConflict
+	}
+
+	return tx.Commit()
 }

@@ -53,11 +53,27 @@ func runMigrations(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	for _, file := range []string{
+		"migrations/002_batch_b.sql",
+		"migrations/003_actions.sql",
+	} {
+		content, err := migrationFiles.ReadFile(file)
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(ctx, string(content)); err != nil {
+			return err
+		}
+	}
+
 	//旧分支也使用版本1，必须同时确认所需列存在
 	for _, query := range []string{
 		`SELECT id, name, definition_id, definition_version, status, state_json, state_version FROM agents LIMIT 0`,
 		`SELECT id, type, payload_json, created_at FROM events LIMIT 0`,
 		`SELECT id, agent_id, event_id, status, created_at, started_at, finished_at, error, attempt_count, result_json FROM executions LIMIT 0`,
+		`SELECT sequence, id, execution_id, agent_id, request_json, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json FROM actions LIMIT 0`,
+		`SELECT id, action_id, number, status, started_at, finished_at, failure_json FROM action_attempts LIMIT 0`,
 	} {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {
