@@ -22,6 +22,10 @@ func (s *Session) ReceiveEvent(
 	}
 	defer s.backend.unlock()
 
+	if err := core.ValidateEvent(event); err != nil {
+		return core.ReceivedEvent{}, err
+	}
+
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return core.ReceivedEvent{}, err
@@ -93,6 +97,9 @@ func (s *Session) ReceiveEvent(
 
 		var createdAt time.Time
 		createdAt, err = time.Parse(time.RFC3339Nano, storedCreated)
+		if err != nil {
+			return core.ReceivedEvent{}, err
+		}
 		if err = codec.Decode([]byte(storedPayload), &storedPayloadValue); err != nil {
 			return core.ReceivedEvent{}, err
 		}

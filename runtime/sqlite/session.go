@@ -2,9 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
-	"strconv"
 	"time"
 
 	"agent-runtime/codec"
@@ -67,12 +67,21 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 	// if count != 0 {
 	// 	return core.RecoveryReport{}, ErrRecoveryUnsupported
 	// }
-	if _, err := s.listAgents(ctx); err != nil {
+	tx, err := s.backend.db.BeginTx(ctx, nil)
+	if err != nil {
+		return core.RecoveryReport{}, err
+	}
+	defer tx.Rollback()
+
+	records, err := loadRecoveryRecords(ctx, tx)
+	if err != nil {
+		return core.RecoveryReport{}, err
+	}
+	if err := core.ValidateRecoveryRecords(records); err != nil {
 		return core.RecoveryReport{}, err
 	}
 	var orphanEvents int
-
-	err := s.backend.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*)
 		 FROM events e
@@ -82,7 +91,6 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 	if err != nil {
 		return core.RecoveryReport{}, err
 	}
-
 	if orphanEvents != 0 {
 		// 存在没有 Delivery 的孤立 Event，Recovery 不支持这种数据
 		return core.RecoveryReport{}, ErrRecoveryUnsupported
@@ -92,34 +100,7 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 	}
 
 	report := core.RecoveryReport{} // 本次回复结果
-
-	now := time.Now().UTC()
-	nowText := now.Format(time.RFC3339Nano)
-
-	tx, err := s.backend.db.BeginTx(ctx, nil)
-	if err != nil {
-		return core.RecoveryReport{}, err
-	}
-	defer tx.Rollback()
-
-	executionRows, err := tx.QueryContext(
-		ctx,
-		`SELECT d.agent_id, d.event_id, d.execution_id, a.id
-		 FROM deliveries d
-		 JOIN executions e ON e.id = d.execution_id
-		 JOIN execution_attempts a
-		   ON a.execution_id = e.id
-		  AND a.number = e.attempt_count
-		 WHERE d.status = ? AND e.status = ?
-		 ORDER BY d.receive_seq`,
-		string(domain.DeliveryStatusRunning),
-		string(domain.ExecutionStatusRunning),
-	)
-	if err != nil {
-		return core.RecoveryReport{}, err
-	}
-	defer executionRows.Close()
-
+	nowText := time.Now().UTC().Format(time.RFC3339Nano)
 	executionFailure := domain.Failure{
 		Kind:    domain.ErrorKindInterrupted,
 		Message: "execution在恢复前仍处于运行状态",
@@ -128,91 +109,32 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 	if err != nil {
 		return core.RecoveryReport{}, err
 	}
-
-	for executionRows.Next() {
-		var (
-			agentID     string
-			eventID     string
-			executionID string
-			attemptID   string
-		)
-
-		if err := executionRows.Scan(
-			&agentID,
-			&eventID,
-			&executionID,
-			&attemptID,
-		); err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`UPDATE execution_attempts
-			 SET status = ?, finished_at = ?, failure_json = ?
-			 WHERE id = ? AND status = ?`,
-			string(domain.AttemptStatusInterrupted),
-			nowText,
-			string(executionFailureJSON),
-			attemptID,
-			string(domain.AttemptStatusRunning),
-		)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`UPDATE executions
-			 SET status = ?, started_at = NULL, finished_at = NULL, error = NULL, result_json = NULL
-			 WHERE id = ? AND status = ?`,
-			string(domain.ExecutionStatusPending),
-			executionID,
-			string(domain.ExecutionStatusRunning),
-		)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`UPDATE deliveries
-			 SET status = ?
-			 WHERE agent_id = ? AND event_id = ? AND status = ?`,
-			string(domain.DeliveryStatusPending),
-			agentID,
-			eventID,
-			string(domain.DeliveryStatusRunning),
-		)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		report.RequeuedDeliveries = append(
-			report.RequeuedDeliveries,
-			domain.DeliveryKey{
-				AgentID: domain.ID(agentID),
-				EventID: domain.ID(eventID),
-			},
-		)
+	attempts := make(map[domain.ID]domain.Attempt)
+	for _, attempt := range records.Attempts {
+		attempts[attempt.ExecutionID] = attempt
 	}
-
-	if err := executionRows.Err(); err != nil {
-		return core.RecoveryReport{}, err
+	for _, delivery := range records.Deliveries {
+		if delivery.Status != domain.DeliveryStatusRunning {
+			continue
+		}
+		attempt := attempts[delivery.ExecutionID]
+		if err := recoveryUpdate(ctx, tx,
+			`UPDATE execution_attempts SET status = ?, finished_at = ?, failure_json = ? WHERE id = ? AND status = ?`,
+			string(domain.AttemptStatusInterrupted), nowText, string(executionFailureJSON), string(attempt.ID), string(domain.AttemptStatusRunning)); err != nil {
+			return core.RecoveryReport{}, err
+		}
+		if err := recoveryUpdate(ctx, tx,
+			`UPDATE executions SET status = ?, started_at = NULL, finished_at = NULL, error = NULL, result_json = NULL WHERE id = ? AND status = ?`,
+			string(domain.ExecutionStatusPending), string(delivery.ExecutionID), string(domain.ExecutionStatusRunning)); err != nil {
+			return core.RecoveryReport{}, err
+		}
+		if err := recoveryUpdate(ctx, tx,
+			`UPDATE deliveries SET status = ? WHERE agent_id = ? AND event_id = ? AND status = ?`,
+			string(domain.DeliveryStatusPending), string(delivery.Key.AgentID), string(delivery.Key.EventID), string(domain.DeliveryStatusRunning)); err != nil {
+			return core.RecoveryReport{}, err
+		}
+		report.RequeuedDeliveries = append(report.RequeuedDeliveries, delivery.Key)
 	}
-
-	rows, err := tx.QueryContext(
-		ctx,
-		`SELECT id, recovery_policy, max_attempts, attempt_count
-		 FROM actions
-		 WHERE status = ?
-		 ORDER BY sequence`,
-		string(domain.ActionStatusRunning),
-	)
-	if err != nil {
-		return core.RecoveryReport{}, err
-	}
-	defer rows.Close()
 
 	failure := domain.Failure{
 		Kind:    domain.ErrorKindInterrupted,
@@ -222,75 +144,31 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 	if err != nil {
 		return core.RecoveryReport{}, err
 	}
-
-	for rows.Next() {
-		var (
-			actionID         string
-			recoveryPolicy   string
-			maxAttemptsText  string
-			attemptCountText string
-		)
-
-		if err := rows.Scan(
-			&actionID,
-			&recoveryPolicy,
-			&maxAttemptsText,
-			&attemptCountText,
-		); err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		maxAttempts, err := strconv.ParseUint(maxAttemptsText, 10, 64)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		attemptCount, err := strconv.ParseUint(attemptCountText, 10, 64)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`UPDATE actions
-			 SET status = ?, last_error_json = ?
-			 WHERE id = ? AND status = ?`,
-			string(domain.ActionStatusUnknown),
-			string(failureJSON),
-			actionID,
-			string(domain.ActionStatusRunning),
-		)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`UPDATE action_attempts
-			 SET status = ?, finished_at = ?, failure_json = ?
-			 WHERE action_id = ? AND number = ? AND status = ?`,
-			string(domain.ActionStatusUnknown),
-			nowText,
-			string(failureJSON),
-			actionID,
-			strconv.FormatUint(attemptCount, 10),
-			string(domain.ActionStatusRunning),
-		)
-		if err != nil {
-			return core.RecoveryReport{}, err
-		}
-
-		id := domain.ID(actionID)
-		report.UnknownActions = append(report.UnknownActions, id)
-
-		if domain.RecoveryPolicy(recoveryPolicy) == domain.RecoveryPolicySafeRetry &&
-			attemptCount < maxAttempts {
-			report.RetryableActions = append(report.RetryableActions, id)
-		}
+	actionAttempts := make(map[domain.ID]domain.ActionAttempt)
+	for _, attempt := range records.ActionAttempts {
+		actionAttempts[attempt.ActionID] = attempt
 	}
-
-	if err := rows.Err(); err != nil {
-		return core.RecoveryReport{}, err
+	for _, action := range records.Actions {
+		if action.Status == domain.ActionStatusRunning {
+			if err := recoveryUpdate(ctx, tx,
+				`UPDATE actions SET status = ?, last_error_json = ? WHERE id = ? AND status = ?`,
+				string(domain.ActionStatusUnknown), string(failureJSON), string(action.Request.ID), string(domain.ActionStatusRunning)); err != nil {
+				return core.RecoveryReport{}, err
+			}
+			attempt := actionAttempts[action.Request.ID]
+			if err := recoveryUpdate(ctx, tx,
+				`UPDATE action_attempts SET status = ?, finished_at = ?, failure_json = ? WHERE id = ? AND status = ?`,
+				string(domain.ActionStatusUnknown), nowText, string(failureJSON), string(attempt.ID), string(domain.ActionStatusRunning)); err != nil {
+				return core.RecoveryReport{}, err
+			}
+			action.Status = domain.ActionStatusUnknown
+		}
+		if action.Status == domain.ActionStatusUnknown {
+			report.UnknownActions = append(report.UnknownActions, action.Request.ID)
+			if action.RecoveryPolicy == domain.RecoveryPolicySafeRetry && action.AttemptCount < action.MaxAttempts {
+				report.RetryableActions = append(report.RetryableActions, action.Request.ID)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -301,6 +179,21 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 	s.ready = true
 
 	return cloneSQLiteRecoveryReport(report), nil
+}
+
+func recoveryUpdate(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return core.ErrStoreConflict
+	}
+	return nil
 }
 
 func (s *Session) Close(ctx context.Context) error {

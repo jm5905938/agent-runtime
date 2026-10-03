@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -118,7 +121,7 @@ func (s *Session) loadAttempts(
 	rows, err := s.backend.db.QueryContext(
 		ctx,
 		`SELECT id, number, status, started_at, finished_at, failure_json
-		 FROM execution_attempts WHERE execution_id = ? ORDER BY number`,
+		 FROM execution_attempts WHERE execution_id = ?`,
 		string(executionID),
 	)
 	if err != nil {
@@ -181,6 +184,7 @@ func (s *Session) loadAttempts(
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Number < result[j].Number })
 
 	return result, nil
 }
@@ -338,6 +342,9 @@ func (s *Session) ClaimExecution(
 	attemptCount, err := strconv.ParseUint(attemptCountText, 10, 64)
 	if err != nil {
 		return nil, err
+	}
+	if attemptCount == math.MaxUint64 {
+		return nil, fmt.Errorf("execution %s尝试次数已耗尽: %w", executionID, core.ErrStoreConflict)
 	}
 
 	newCount := attemptCount + 1
@@ -618,6 +625,17 @@ func (s *Session) CommitExecution(
 	if currentVersion != token.ExpectedStateVersion {
 		return domain.ExecutionResult{}, core.ErrStoreStaleClaim
 	}
+	if currentVersion == math.MaxUint64 {
+		return domain.ExecutionResult{}, fmt.Errorf("提交状态: 状态版本已耗尽")
+	}
+	if _, err := codec.Encode(commit); err != nil {
+		return domain.ExecutionResult{}, fmt.Errorf("提交execution记录: %w", err)
+	}
+	if err := validateNewActionsTx(ctx, tx, commit.Actions, domain.Execution{
+		ID: token.ExecutionID, AgentID: token.Delivery.AgentID,
+	}); err != nil {
+		return domain.ExecutionResult{}, err
+	}
 
 	// 解码state
 	var currentState map[string]any
@@ -767,6 +785,38 @@ func (s *Session) CommitExecution(
 	return storedResult, nil
 }
 
+func validateNewActionsTx(ctx context.Context, tx *sql.Tx, actions []domain.ActionRecord, execution domain.Execution) error {
+	ids, eventIDs := make(map[domain.ID]bool), make(map[domain.ID]bool)
+	for _, action := range actions {
+		if err := core.ValidateNewActionRecord(action, execution); err != nil {
+			return err
+		}
+		if ids[action.Request.ID] || eventIDs[action.ResultEventID] {
+			return fmt.Errorf("action或结果event id重复: %w", core.ErrStoreConflict)
+		}
+		ids[action.Request.ID], eventIDs[action.ResultEventID] = true, true
+		var actionExists, eventExists, eventReserved bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM actions WHERE id = ?),
+			 EXISTS (SELECT 1 FROM events WHERE id = ?),
+			 EXISTS (SELECT 1 FROM actions WHERE result_event_id = ?)`,
+			string(action.Request.ID), string(action.ResultEventID), string(action.ResultEventID),
+		).Scan(&actionExists, &eventExists, &eventReserved); err != nil {
+			return err
+		}
+		if actionExists {
+			return fmt.Errorf("action %s已存在: %w", action.Request.ID, core.ErrStoreConflict)
+		}
+		if eventExists {
+			return fmt.Errorf("action结果event %s已存在: %w", action.ResultEventID, core.ErrStoreConflict)
+		}
+		if eventReserved {
+			return fmt.Errorf("action结果event %s已保留: %w", action.ResultEventID, core.ErrStoreConflict)
+		}
+	}
+	return nil
+}
+
 func (s *Session) FailExecution(
 	ctx context.Context,
 	failure core.ExecutionFailure,
@@ -801,7 +851,7 @@ func (s *Session) FailExecution(
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return core.ErrStoreNotFound
+			return core.ErrStoreStaleClaim
 		}
 		return err
 	}
@@ -866,6 +916,24 @@ func (s *Session) FailExecution(
 	}
 	if expectedVer != token.ExpectedStateVersion {
 		return core.ErrStoreStaleClaim
+	}
+	var currentVersionText string
+	if err := tx.QueryRowContext(ctx, `SELECT state_version FROM agents WHERE id = ?`,
+		string(token.Delivery.AgentID)).Scan(&currentVersionText); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return core.ErrStoreStaleClaim
+		}
+		return err
+	}
+	currentVersion, err := strconv.ParseUint(currentVersionText, 10, 64)
+	if err != nil {
+		return err
+	}
+	if currentVersion != token.ExpectedStateVersion {
+		return core.ErrStoreStaleClaim
+	}
+	if err := core.ValidateFailure(failure.Failure); err != nil {
+		return err
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)

@@ -19,6 +19,10 @@ func SameEventContent(a, b domain.Event) (bool, error) {
 
 // 按json比较，保留大整数精度
 func sameJSONValue(a, b any) (bool, error) {
+	return SameJSONValue(a, b)
+}
+
+func SameJSONValue(a, b any) (bool, error) {
 	decode := func(value any) (any, error) {
 		encoded, err := codec.Encode(value)
 		if err != nil {

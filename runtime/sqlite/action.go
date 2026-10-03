@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"reflect"
+	"sort"
 	"strconv"
 	"time"
 
@@ -252,8 +252,15 @@ func (s *Session) CompleteAction(
 		action.LastError = &failure
 	}
 
+	if err := validateSQLiteActionCompletion(action, completion); err != nil {
+		return domain.ActionResult{}, err
+	}
+	if action.AttemptCount != completion.Token.AttemptNumber {
+		return domain.ActionResult{}, core.ErrStoreStaleClaim
+	}
+
 	if action.Result != nil {
-		sameResult, err := sameJSONValueSQLite(*action.Result, completion.Result)
+		sameResult, err := core.SameJSONValue(*action.Result, completion.Result)
 		if err != nil {
 			return domain.ActionResult{}, err
 		}
@@ -277,16 +284,11 @@ func (s *Session) CompleteAction(
 			return domain.ActionResult{}, core.ErrStoreConflict
 		}
 
-		return cloneSQLiteActionResult(completion.Result)
+		return cloneSQLiteActionResult(*action.Result)
 	}
 
-	if domain.ActionStatus(status) != domain.ActionStatusRunning ||
-		attemptCount != completion.Token.AttemptNumber {
+	if domain.ActionStatus(status) != domain.ActionStatusRunning {
 		return domain.ActionResult{}, core.ErrStoreStaleClaim
-	}
-
-	if err := validateSQLiteActionCompletion(action, completion); err != nil {
-		return domain.ActionResult{}, err
 	}
 
 	resultJSONBytes, err := codec.Encode(completion.Result)
@@ -492,12 +494,7 @@ func (s *Session) RecordActionUnknown(
 		return core.ErrStoreStaleClaim
 	}
 
-	switch failure.Kind {
-	case domain.ErrorKindBusiness,
-		domain.ErrorKindRuntime,
-		domain.ErrorKindInterrupted,
-		domain.ErrorKindUnknown:
-	default:
+	if err := core.ValidateFailure(failure); err != nil {
 		return core.ErrStoreConflict
 	}
 
@@ -653,8 +650,7 @@ func (s *Session) LoadAction(
 		ctx,
 		`SELECT id, number, status, started_at, finished_at, failure_json
 		 FROM action_attempts
-		 WHERE action_id = ?
-		 ORDER BY number`,
+		 WHERE action_id = ?`,
 		string(actionID),
 	)
 	if err != nil {
@@ -726,6 +722,7 @@ func (s *Session) LoadAction(
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	sort.Slice(attempts, func(i, j int) bool { return attempts[i].Number < attempts[j].Number })
 
 	return &core.StoredAction{
 		Action:   action,
@@ -848,13 +845,23 @@ func validateSQLiteActionCompletion(
 	action domain.ActionRecord,
 	completion core.ActionCompletion,
 ) error {
+	if err := core.ValidateActionMetadata(action); err != nil {
+		return err
+	}
 	result := completion.Result
 	event := completion.Event
+	if err := core.ValidateEvent(event); err != nil {
+		return err
+	}
+	if _, err := codec.Encode(completion); err != nil {
+		return err
+	}
 
 	if result.ActionID != action.Request.ID ||
 		result.EventID != action.ResultEventID ||
 		event.ID != action.ResultEventID ||
-		event.Type != "action.result" {
+		event.Type != "action.result" ||
+		action.Request.ExecutionID == nil || *action.Request.ExecutionID == "" {
 		return core.ErrStoreConflict
 	}
 
@@ -870,6 +877,11 @@ func validateSQLiteActionCompletion(
 	if result.Status == domain.ActionStatusFailed && result.Error == nil {
 		return core.ErrStoreConflict
 	}
+	if result.Error != nil {
+		if err := core.ValidateFailure(*result.Error); err != nil {
+			return err
+		}
+	}
 
 	expected := map[string]any{
 		"action_id":    string(action.Request.ID),
@@ -884,7 +896,7 @@ func validateSQLiteActionCompletion(
 		expected["error"] = result.Error.Message
 	}
 
-	equal, err := sameJSONValueSQLite(expected, event.Payload)
+	equal, err := core.SameJSONValue(expected, event.Payload)
 	if err != nil {
 		return err
 	}
@@ -893,30 +905,6 @@ func validateSQLiteActionCompletion(
 	}
 
 	return nil
-}
-
-func sameJSONValueSQLite(a, b any) (bool, error) {
-	left, err := codec.Encode(a)
-	if err != nil {
-		return false, err
-	}
-
-	right, err := codec.Encode(b)
-	if err != nil {
-		return false, err
-	}
-
-	var leftValue any
-	if err := codec.Decode(left, &leftValue); err != nil {
-		return false, err
-	}
-
-	var rightValue any
-	if err := codec.Decode(right, &rightValue); err != nil {
-		return false, err
-	}
-
-	return reflect.DeepEqual(leftValue, rightValue), nil
 }
 
 func cloneSQLiteActionResult(

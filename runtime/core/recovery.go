@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"agent-runtime/codec"
@@ -226,9 +225,7 @@ func validateRecoveryExecution(s *MemoryStore, execution domain.Execution, ids m
 
 func validateRecoveryAction(s *MemoryStore, action domain.ActionRecord, ids map[domain.ID]bool) error {
 	id := action.Request.ID
-	if id == "" || strings.TrimSpace(action.Request.Type) == "" || action.Request.ExecutionID == nil || action.ResultEventID == "" ||
-		strings.TrimSpace(action.HandlerVersion) == "" || strings.TrimSpace(action.IdempotencyKey) == "" || action.MaxAttempts == 0 || action.AttemptCount > action.MaxAttempts ||
-		(action.RecoveryPolicy != domain.RecoveryPolicyManual && action.RecoveryPolicy != domain.RecoveryPolicySafeRetry) {
+	if ValidateActionMetadata(action) != nil || action.AttemptCount > action.MaxAttempts {
 		return recoveryConflict("action元数据", id)
 	}
 	execution, exists := s.executions[*action.Request.ExecutionID]

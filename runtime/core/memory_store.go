@@ -335,15 +335,8 @@ func (s *MemoryStore) CommitExecution(ctx context.Context, commit ExecutionCommi
 }
 
 func (s *MemoryStore) validateNewAction(action domain.ActionRecord, execution domain.Execution) error {
-	if action.Request.ID == "" || action.Request.Type == "" || action.AgentID != execution.AgentID ||
-		action.Request.ExecutionID == nil || *action.Request.ExecutionID != execution.ID ||
-		action.Status != domain.ActionStatusPending || action.AttemptCount != 0 || action.Result != nil || action.LastError != nil ||
-		strings.TrimSpace(action.HandlerVersion) == "" || strings.TrimSpace(action.IdempotencyKey) == "" ||
-		action.MaxAttempts == 0 || action.ResultEventID == "" {
-		return fmt.Errorf("action %s初始记录或关联无效: %w", action.Request.ID, ErrStoreConflict)
-	}
-	if action.RecoveryPolicy != domain.RecoveryPolicyManual && action.RecoveryPolicy != domain.RecoveryPolicySafeRetry {
-		return fmt.Errorf("action %s恢复策略无效: %w", action.Request.ID, ErrStoreConflict)
+	if err := ValidateNewActionRecord(action, execution); err != nil {
+		return err
 	}
 	if _, exists := s.actions[action.Request.ID]; exists {
 		return fmt.Errorf("action %s已存在: %w", action.Request.ID, ErrStoreConflict)
@@ -360,6 +353,10 @@ func (s *MemoryStore) validateNewAction(action domain.ActionRecord, execution do
 }
 
 func validateStoredFailure(failure domain.Failure) error {
+	return ValidateFailure(failure)
+}
+
+func ValidateFailure(failure domain.Failure) error {
 	switch failure.Kind {
 	case domain.ErrorKindBusiness, domain.ErrorKindRuntime, domain.ErrorKindInterrupted, domain.ErrorKindUnknown:
 	default:
@@ -523,6 +520,9 @@ func (s *MemoryStore) CompleteAction(ctx context.Context, completion ActionCompl
 }
 
 func validateActionCompletion(action domain.ActionRecord, completion ActionCompletion) error {
+	if err := ValidateActionMetadata(action); err != nil {
+		return err
+	}
 	result, event := completion.Result, completion.Event
 	if result.ActionID != action.Request.ID || result.EventID != action.ResultEventID || event.ID != action.ResultEventID || event.Type != "action.result" {
 		return fmt.Errorf("action结果身份不匹配: %w", ErrStoreConflict)

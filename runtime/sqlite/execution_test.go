@@ -207,7 +207,7 @@ func TestFailExecution(t *testing.T) {
 	failure := core.ExecutionFailure{
 		Token: claim.Token,
 		Failure: domain.Failure{
-			Kind:    domain.ErrorKind("test"),
+			Kind:    domain.ErrorKindBusiness,
 			Message: "boom",
 		},
 		Interrupted: false,
@@ -287,7 +287,7 @@ func TestRequeueDelivery(t *testing.T) {
 	failure := core.ExecutionFailure{
 		Token: claim.Token,
 		Failure: domain.Failure{
-			Kind:    domain.ErrorKind("test"),
+			Kind:    domain.ErrorKindBusiness,
 			Message: "boom",
 		},
 	}
@@ -538,7 +538,7 @@ func TestExecutionRetryCommit(t *testing.T) {
 	failure := core.ExecutionFailure{
 		Token: claim1.Token,
 		Failure: domain.Failure{
-			Kind:    domain.ErrorKind("test"),
+			Kind:    domain.ErrorKindBusiness,
 			Message: "boom",
 		},
 	}
