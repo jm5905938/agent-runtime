@@ -1,4 +1,4 @@
-//Package python将go执行过程连接到常驻的python agent worker
+// Package python将go执行过程连接到常驻的python agent worker
 package python
 
 import (
@@ -38,8 +38,8 @@ type Options struct {
 	Stderr io.Writer
 }
 
-//Runner串行调用同一个worker，响应无效、输入输出故障或调用中断时丢弃该worker，后续Run会启动新worker，
-//中断的execution不会自动重试
+// Runner串行调用同一个worker，响应无效、输入输出故障或调用中断时丢弃该worker，后续Run会启动新worker，
+// 中断的execution不会自动重试
 type Runner struct {
 	options Options
 	gate    chan struct{}
@@ -57,7 +57,7 @@ type worker struct {
 	stopOnce sync.Once
 }
 
-//Error返回runtime可识别的失败原因
+// Error返回runtime可识别的失败原因
 type Error struct {
 	kind    domain.ErrorKind
 	message string
@@ -272,7 +272,7 @@ func (r *Runner) discard(w *worker) {
 	r.mu.Unlock()
 }
 
-//Close中断当前调用并回收worker进程，随后永久关闭此runner，重复调用是安全的
+// Close中断当前调用并回收worker进程，随后永久关闭此runner，重复调用是安全的
 func (r *Runner) Close() error {
 	r.mu.Lock()
 	if !r.closed {

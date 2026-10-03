@@ -7,14 +7,14 @@ import (
 	"agent-runtime/domain"
 )
 
-//管理存储的独占访问
+// 管理存储的独占访问
 type memoryRecoveryStore struct {
 	mu    sync.Mutex
 	store *MemoryStore
 	owner *memoryRecoverySession
 }
 
-//一次存储占用，记录恢复和关闭状态
+// 一次存储占用，记录恢复和关闭状态
 type memoryRecoverySession struct {
 	backend *memoryRecoveryStore
 	ready   bool
@@ -24,7 +24,7 @@ type memoryRecoverySession struct {
 
 var _ RecoverySession = (*memoryRecoverySession)(nil)
 
-//内存恢复后端，只通过独占会话访问
+// 内存恢复后端，只通过独占会话访问
 func NewMemoryRecoveryStore() RecoveryStore {
 	return &memoryRecoveryStore{store: NewMemoryStore()}
 }

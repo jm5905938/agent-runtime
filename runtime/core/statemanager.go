@@ -7,7 +7,7 @@ import (
 	"math"
 )
 
-//校验并合并状态增量
+// 校验并合并状态增量
 type StateManager struct{}
 
 func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) error {

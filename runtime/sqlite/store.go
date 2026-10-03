@@ -8,7 +8,7 @@ import (
 	"agent-runtime/core"
 )
 
-//Backend目前只提供A批次的agent持久化，不实现完整RecoveryStore
+// Backend目前只提供A批次的agent持久化，不实现完整RecoveryStore
 type Backend struct {
 	db     *sql.DB
 	path   string

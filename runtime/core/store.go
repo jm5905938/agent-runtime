@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	ErrStoreNotFound = errors.New("store中找不到记录")
-	ErrStoreConflict = errors.New("store身份或状态冲突")
+	ErrStoreNotFound   = errors.New("store中找不到记录")
+	ErrStoreConflict   = errors.New("store身份或状态冲突")
 	ErrStoreStaleClaim = errors.New("store的claim已过期")
 )
 

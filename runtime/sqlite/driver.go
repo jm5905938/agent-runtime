@@ -69,7 +69,19 @@ func Open(path string) (backend *Backend, err error) {
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "synchronous(NORMAL)")
 	query.Set("_txlock", "immediate")
-	dsn := (&url.URL{Scheme: "file", Path: absolute, RawQuery: query.Encode()}).String()
+	dsnPath := filepath.ToSlash(absolute)
+
+	if filepath.VolumeName(absolute) != "" &&
+		!strings.HasPrefix(dsnPath, "/") {
+		dsnPath = "/" + dsnPath
+	}
+
+	dsn := (&url.URL{
+		Scheme:   "file",
+		Path:     dsnPath,
+		RawQuery: query.Encode(),
+	}).String()
+
 	db, err = sql.Open(Name, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开sqlite: %w", err)

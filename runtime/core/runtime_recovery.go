@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-//启动失败且清理未完成，可重试close
+// 启动失败且清理未完成，可重试close
 type RuntimeOpenError struct {
 	cause   error
 	session RecoverySession
@@ -17,7 +17,7 @@ func (e *RuntimeOpenError) Error() string                   { return e.cause.Err
 func (e *RuntimeOpenError) Unwrap() error                   { return e.cause }
 func (e *RuntimeOpenError) Close(ctx context.Context) error { return e.session.Close(ctx) }
 
-//取得会话，恢复后再允许执行
+// 取得会话，恢复后再允许执行
 func OpenRuntime(ctx context.Context, backend RecoveryStore) (*Runtime, error) {
 	if backend == nil || isNilValue(backend) {
 		return nil, fmt.Errorf("创建runtime: recovery store不能为空")
@@ -84,7 +84,7 @@ func (r *Runtime) isStopping() bool {
 	}
 }
 
-//先停止接收，再等在途调用退出。超时不释放所有权
+// 先停止接收，再等在途调用退出。超时不释放所有权
 func (r *Runtime) Close(ctx context.Context) error {
 	r.lifeMu.Lock()
 	if r.closed {

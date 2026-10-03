@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-//发给agent的消息
+// 发给agent的消息
 type Event struct {
 	ID        ID             `json:"id"`
 	Type      string         `json:"type"`
@@ -10,7 +10,7 @@ type Event struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
-//创建消息，生成id和时间
+// 创建消息，生成id和时间
 func NewEvent(eventType string, payload map[string]any) Event {
 	return Event{
 		ID:        mustNewID(),

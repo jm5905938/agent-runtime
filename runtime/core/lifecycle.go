@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-//agent生命周期转换
+// agent生命周期转换
 type LifecycleManager struct{}
 
 var allowedTransitions = map[domain.AgentStatus]map[domain.AgentStatus]bool{
@@ -16,7 +16,7 @@ var allowedTransitions = map[domain.AgentStatus]map[domain.AgentStatus]bool{
 	domain.AgentStatusTerminated:  {},
 }
 
-//切换状态，非法转换保持原状
+// 切换状态，非法转换保持原状
 func (LifecycleManager) Transition(agent *domain.AgentInstance, target domain.AgentStatus) error {
 	if agent == nil {
 		return fmt.Errorf("切换agent生命周期: agent不能为空")

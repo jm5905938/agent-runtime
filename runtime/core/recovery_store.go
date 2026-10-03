@@ -13,19 +13,19 @@ var (
 	ErrRecoveryRequired = errors.New("store需要恢复")
 )
 
-//恢复会话入口
+// 恢复会话入口
 type RecoveryStore interface {
 	OpenSession(ctx context.Context) (RecoverySession, error)
 }
 
-//独占会话，恢复成功后才允许业务写入
+// 独占会话，恢复成功后才允许业务写入
 type RecoverySession interface {
 	StateStore
 	Recover(ctx context.Context) (RecoveryReport, error)
 	Close(ctx context.Context) error
 }
 
-//恢复事务的结果，不代表任务已完成
+// 恢复事务的结果，不代表任务已完成
 type RecoveryReport struct {
 	RequeuedDeliveries []domain.DeliveryKey `json:"requeued_deliveries"`
 	UnknownActions     []domain.ID          `json:"unknown_actions"`

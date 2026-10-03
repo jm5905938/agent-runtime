@@ -8,8 +8,8 @@ import (
 	"reflect"
 )
 
-//agent定义
-//好吧我实在想不到可以用什么更好的词语，那就放点洋屁吧
+// agent定义
+// 好吧我实在想不到可以用什么更好的词语，那就放点洋屁吧
 func (r *Runtime) RegisterDefinition(ref domain.DefinitionRef, runner AgentRunner) error {
 	done, err := r.enter()
 	if err != nil {
