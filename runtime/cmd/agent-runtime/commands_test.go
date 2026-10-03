@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-func TestPersistentCommandsRejectUnconfiguredBackend(t *testing.T) {
+func TestPersistentCommandsRejectMissingBackendOpener(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "not-created")
 	for _, command := range [][]string{
 		{"init"}, {"status"}, {"run"}, {"submit", "--agent", "agent", "--event-id", "event", "--message", ""},
@@ -24,7 +24,7 @@ func TestPersistentCommandsRejectUnconfiguredBackend(t *testing.T) {
 	} {
 		args := append([]string{"--data-dir", directory, "--json"}, command...)
 		var stdout, stderr bytes.Buffer
-		if code := runCommand(context.Background(), args, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
+		if code := runCommandWithBackend(context.Background(), args, &stdout, &stderr, nil); code != 1 || stdout.Len() != 0 {
 			t.Fatalf("未配置后端却成功: code=%d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
 		}
 		assertCommandError(t, stderr.Bytes(), "backend_unavailable", 1)

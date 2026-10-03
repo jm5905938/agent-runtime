@@ -286,7 +286,7 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
   retry    --agent <id> --event-id <id>         重新排队失败的delivery，不执行
 
 公共参数可放在命令前后:
-  --data-dir <目录>       持久子命令必填，当前sqlite后端尚未接入
+  --data-dir <目录>       持久子命令必填，自动创建目录，数据保存到store.db
   --json                 成功结果写stdout，结构化错误写stderr
   --python <路径>        python可执行文件，默认python3，需要3.12+
   --python-source <目录> 包含agent_runtime的源码目录
@@ -294,5 +294,7 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
   --help                 显示帮助
 
 无子命令时运行一次内存echo，默认消息hello，进程退出后数据丢失
+持久子命令启动时独占数据库并恢复中断记录，只有run执行待办
+status也会执行启动恢复，但不会运行agent或action
 退出码: 0命令正常结束，1操作或存储错误，2参数错误
 `
