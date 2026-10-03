@@ -120,7 +120,7 @@ func (s *MemoryStore) prepareEvent(agentID domain.ID, event domain.Event) (Recei
 		return ReceivedEvent{}, domain.Event{}, err
 	}
 	if saved, exists := s.events[event.ID]; exists {
-		equal, err := sameEventContent(saved, event)
+		equal, err := SameEventContent(saved, event)
 		if err != nil {
 			return ReceivedEvent{}, domain.Event{}, err
 		}
@@ -491,7 +491,7 @@ func (s *MemoryStore) CompleteAction(ctx context.Context, completion ActionCompl
 		if err != nil {
 			return domain.ActionResult{}, err
 		}
-		sameEvent, err := sameEventContent(s.events[action.ResultEventID], completion.Event)
+		sameEvent, err := SameEventContent(s.events[action.ResultEventID], completion.Event)
 		if err != nil {
 			return domain.ActionResult{}, err
 		}

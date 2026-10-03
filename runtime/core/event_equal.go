@@ -10,7 +10,7 @@ import (
 	"agent-runtime/domain"
 )
 
-func sameEventContent(a, b domain.Event) (bool, error) {
+func SameEventContent(a, b domain.Event) (bool, error) {
 	if a.ID != b.ID || a.Type != b.Type {
 		return false, nil
 	}

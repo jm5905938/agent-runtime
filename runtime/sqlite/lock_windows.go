@@ -1,0 +1,50 @@
+//go:build windows
+
+package sqlite
+
+import (
+	"errors"
+	"fmt"
+	"os"
+
+	"agent-runtime/core"
+
+	"golang.org/x/sys/windows"
+)
+
+func acquireOwnership(path string) (*os.File, error) {
+	// 打开或创建独占锁文件：database.db.lock
+	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("打开sqlite锁文件: %w", err)
+	}
+
+	var overlapped windows.Overlapped
+
+	// 锁定锁文件的第一个字节：
+	// EXCLUSIVE：独占
+	// FAIL_IMMEDIATELY：如果被其他进程占用，立即失败，不等待
+	err = windows.LockFileEx(
+		windows.Handle(file.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0,
+		1,
+		0,
+		&overlapped,
+	)
+	if err != nil {
+		closeErr := file.Close()
+
+		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+			return nil, errors.Join(core.ErrStoreOwned, closeErr)
+		}
+
+		return nil, errors.Join(
+			fmt.Errorf("锁定sqlite文件: %w", err),
+			closeErr,
+		)
+	}
+
+	// Session.Close 会调用 file.Close，Windows 会自动释放锁
+	return file, nil
+}
