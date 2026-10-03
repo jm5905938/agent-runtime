@@ -4,6 +4,7 @@ import (
 	"agent-runtime/cli"
 	"agent-runtime/core"
 	"agent-runtime/domain"
+	"agent-runtime/model"
 	pythonrunner "agent-runtime/python"
 	"context"
 	"encoding/json"
@@ -22,6 +23,7 @@ type commandOptions struct {
 	dataDir string
 	asJSON  bool
 	python  pythonrunner.Options
+	envFile string
 }
 
 func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -46,6 +48,28 @@ func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io
 	}
 	reportError := func(err error) int {
 		return writeCommandError(stderr, options.asJSON, err, diagnostics.String())
+	}
+	if options.request.Command == "chat" {
+		config, err := model.LoadConfig(options.envFile)
+		if err != nil {
+			return reportError(err)
+		}
+		result, err := runMainAgent(ctx, options.request.Message, options.python, config)
+		if err != nil {
+			return reportError(err)
+		}
+		if options.asJSON {
+			err = json.NewEncoder(stdout).Encode(struct {
+				chatResult
+				WorkerDiagnostics string `json:"worker_diagnostics,omitempty"`
+			}{result, diagnostics.String()})
+		} else {
+			_, err = fmt.Fprintln(stdout, result.Result)
+		}
+		if err != nil {
+			return reportError(fmt.Errorf("输出失败: %w", err))
+		}
+		return 0
 	}
 	if options.request.Command == "" {
 		result, err := runEcho(ctx, options.request.Message, options.python)
@@ -127,6 +151,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	flags.StringVar(&options.python.SourceDir, "python-source", defaultPythonSource(), "python源码目录")
 	flags.DurationVar(&options.python.Timeout, "timeout", 30*time.Second, "每次python调用期限")
 	flags.StringVar(&options.request.Message, "message", "hello", "echo消息")
+	flags.StringVar(&options.envFile, "env-file", defaultEnvFile(), "模型配置文件")
 	flags.StringVar(&options.request.Name, "name", "echo", "实例名称")
 	flags.StringVar(&agentID, "agent", "", "agent id")
 	flags.StringVar(&eventID, "event-id", "", "event id")
@@ -145,7 +170,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	if remaining := flags.Args(); len(remaining) > 0 {
 		options.request.Command = remaining[0]
 		switch options.request.Command {
-		case "init", "submit", "run", "status", "retry":
+		case "init", "submit", "run", "status", "retry", "chat":
 		default:
 			return options, &cli.UsageError{Message: "未知命令" + options.request.Command}
 		}
@@ -168,6 +193,8 @@ func parseCommand(args []string) (commandOptions, error) {
 	switch options.request.Command {
 	case "":
 		allowed["message"] = true
+	case "chat":
+		allowed["message"], allowed["env-file"] = true, true
 	case "init":
 		allowed["name"] = true
 	case "submit":
@@ -177,7 +204,8 @@ func parseCommand(args []string) (commandOptions, error) {
 	case "retry":
 		allowed["agent"], allowed["event-id"] = true, true
 	}
-	if options.request.Command != "" {
+	persistent := options.request.Command != "" && options.request.Command != "chat"
+	if persistent {
 		allowed["data-dir"] = true
 		if strings.TrimSpace(options.dataDir) == "" {
 			return options, &cli.UsageError{Message: "命令需要--data-dir指定数据目录"}
@@ -192,11 +220,11 @@ func parseCommand(args []string) (commandOptions, error) {
 	if invalid != "" {
 		return options, &cli.UsageError{Message: "当前命令不接受--" + invalid}
 	}
-	if options.request.Command == "submit" && !seen["message"] {
-		return options, &cli.UsageError{Message: "submit需要--message，允许显式传入空字符串"}
+	if (options.request.Command == "submit" || options.request.Command == "chat") && !seen["message"] {
+		return options, &cli.UsageError{Message: options.request.Command + "需要--message，允许显式传入空字符串"}
 	}
 	options.request.AgentID, options.request.EventID = domain.ID(agentID), domain.ID(eventID)
-	if options.request.Command != "" {
+	if persistent {
 		if options.request.Command != "init" {
 			options.request.Name = ""
 		}
@@ -223,7 +251,7 @@ func requestedJSON(args []string) bool {
 			if hasValue {
 				asJSON, _ = strconv.ParseBool(value)
 			}
-		case "message", "agent", "event-id", "name", "data-dir", "python", "python-source", "timeout":
+		case "message", "agent", "event-id", "name", "data-dir", "python", "python-source", "timeout", "env-file":
 			if !hasValue {
 				i++
 			}
@@ -275,9 +303,11 @@ func writeCommandError(stderr io.Writer, asJSON bool, err error, diagnostics ...
 }
 
 const commandHelp = `用法: agent-runtime [--message hello] [--json]
+      agent-runtime chat --message <文本> [--env-file <文件>] [--json]
       agent-runtime --data-dir <目录> <命令> [参数] [--json]
 
 命令:
+  chat     --message <文本> [--env-file <文件>] 调用llm并显示main agent回复
   init     [--name echo]                       创建echo agent
   submit   --agent <id> --event-id <id> --message <文本>
                                               接收消息，不执行
@@ -291,9 +321,11 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
   --python <路径>        python可执行文件，默认python3，需要3.12+
   --python-source <目录> 包含agent_runtime的源码目录
   --timeout <时长>       每次python调用期限，默认30s
+  --env-file <文件>      chat的模型配置文件，默认项目根目录的.env
   --help                 显示帮助
 
 无子命令时运行一次内存echo，默认消息hello，进程退出后数据丢失
+chat每次处理一条输入，进程退出后数据丢失，模型请求期限由LLM_TIMEOUT配置，默认60s
 持久子命令启动时独占数据库并恢复中断记录，只有run执行待办
 status也会执行启动恢复，但不会运行agent或action
 退出码: 0命令正常结束，1操作或存储错误，2参数错误
