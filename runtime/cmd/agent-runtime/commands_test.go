@@ -39,7 +39,7 @@ func TestCommandValidationPrecedesBackendOpen(t *testing.T) {
 	open := func(context.Context, string) (backendHandle, error) { calls++; return backendHandle{}, nil }
 	for _, args := range [][]string{
 		{"--message", string([]byte{0xff})},
-		{"--data-dir", "data"}, {"status"}, {"unknown", "--data-dir", "data"},
+		{"--data-dir", "data"}, {"run"}, {"unknown", "--data-dir", "data"},
 		{"run", "--data-dir", "data", "--agent", "agent"},
 		{"run", "--data-dir", "data", "extra"}, {"init", "--data-dir="},
 		{"init", "--data-dir", "data", "--message="}, {"init", "--data-dir", "data", "--name", " "},

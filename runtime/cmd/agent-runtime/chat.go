@@ -14,11 +14,14 @@ import (
 )
 
 type chatResult struct {
-	AgentID    domain.ID `json:"agent_id"`
-	Status     string    `json:"status"`
-	Result     string    `json:"result"`
-	Executions int       `json:"executions"`
-	Actions    int       `json:"actions"`
+	AgentID         domain.ID `json:"agent_id"`
+	Status          string    `json:"status"`
+	Result          string    `json:"result"`
+	Executions      int       `json:"executions"`
+	Actions         int       `json:"actions"`
+	RequestEventID  domain.ID `json:"request_event_id,omitempty"`
+	Queued          bool      `json:"queued,omitempty"`
+	WaitingActionID domain.ID `json:"waiting_action_id,omitempty"`
 }
 
 func defaultEnvFile() string {

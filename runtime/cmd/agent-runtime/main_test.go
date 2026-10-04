@@ -11,7 +11,7 @@ import (
 )
 
 func TestCommandRejectsUnsupportedOrInvalidArguments(t *testing.T) {
-	for _, args := range [][]string{{"status"}, {"demo"}, {"--reopen"}, {"--data-dir", "data"}, {"--timeout", "0s"}, {"extra"}} {
+	for _, args := range [][]string{{"run"}, {"demo"}, {"--reopen"}, {"--data-dir", "data"}, {"--timeout", "0s"}, {"extra"}} {
 		var stdout, stderr bytes.Buffer
 		if code := runCommand(context.Background(), args, &stdout, &stderr); code != 2 || stdout.Len() != 0 || stderr.Len() == 0 {
 			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())

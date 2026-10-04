@@ -229,6 +229,8 @@ class MainAgent:
                 return self._on_request(context, state, history)
             case "action.result":
                 return self._on_result(context, state, history, legacy)
+            case "action.resolution":
+                return self._on_resolution(context, state, history, legacy)
             case _:
                 raise BusinessError(f"不支持的事件类型: {context.event.type}")
 
@@ -301,6 +303,70 @@ class MainAgent:
             waiting_action_type=action.type,
             waiting_execution_id=context.execution_id,
         )
+        return ExecutionResult(state_update=deepcopy(update), actions=[action])
+
+    def _on_resolution(
+        self, context: ExecutionContext, state: JSONObject, history: list[JSONObject], legacy: bool
+    ) -> ExecutionResult:
+        payload = context.event.payload
+        if state["request_status"] != "waiting":
+            raise BusinessError("main没有等待中的操作")
+        action_type = state.get("waiting_action_type") or "model.generate"
+        execution_id = state.get("waiting_execution_id") or state["request_execution_id"]
+        if not isinstance(payload, dict) or (
+            action_type != "model.generate"
+            or payload.get("action_id") != state["waiting_action_id"]
+            or payload.get("execution_id") != execution_id
+            or payload.get("action_type") != action_type
+        ):
+            raise BusinessError("action.resolution与main等待中的模型操作不匹配")
+        decision = payload.get("decision")
+        if decision not in ("retry", "abandon"):
+            raise BusinessError("action.resolution需要retry或abandon决定")
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise BusinessError("action.resolution需要非空原因")
+        update = initial_state() | deepcopy(state)
+        update["messages"] = history
+        if legacy:
+            update["pending_message"] = None
+            update["pending_messages"] = []
+            update["pending_tool_calls"] = []
+            update["tool_rounds"] = 0
+        elif "pending_messages" not in state:
+            update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
+        if decision == "abandon":
+            return self._finish(context, update, error="用户放弃本轮: " + reason)
+        retry_payload = payload.get("retry_payload")
+        messages = retry_payload.get("messages") if isinstance(retry_payload, dict) else None
+        if not isinstance(messages, list) or not messages:
+            raise BusinessError("重试模型操作需要已保存的非空messages列表")
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") not in (
+                "system", "developer", "user", "assistant", "tool"
+            ) or not (
+                isinstance(message.get("content"), str)
+                or message.get("role") == "assistant"
+                and message.get("content") is None
+                and "tool_calls" in message
+            ):
+                raise BusinessError("重试模型操作的消息格式无效")
+        action = Action(
+            id=str(uuid4()), type="model.generate",
+            payload=deepcopy(retry_payload) | {"retry_of": state["waiting_action_id"]},
+        )
+        update.update(
+            waiting_action_id=action.id,
+            waiting_action_type=action.type,
+            waiting_execution_id=context.execution_id,
+            result_event_id=None,
+            result=None,
+            error=None,
+        )
+        if legacy:
+            # 保留旧格式标记，后续结果仍按缺少原输入的兼容路径处理。
+            del update["messages"]
+            del update["pending_message"]
         return ExecutionResult(state_update=deepcopy(update), actions=[action])
 
     def _on_result(

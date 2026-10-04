@@ -26,7 +26,7 @@ func TestChatCommandCompletesToolLoopWithRealPython(t *testing.T) {
 	}))
 	defer server.Close()
 	config := chatTestConfig(t, server.URL)
-	args := append([]string{"chat", "--message", "查询自己的状态", "--env-file", config, "--json"}, chatTestPython(t)...)
+	args := append([]string{"chat", "--data-dir", t.TempDir(), "--message", "查询自己的状态", "--env-file", config, "--json"}, chatTestPython(t)...)
 	var stdout, stderr bytes.Buffer
 	if code := runCommand(context.Background(), args, &stdout, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("chat工具闭环失败: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -43,6 +43,6 @@ func TestChatCommandCompletesToolLoopWithRealPython(t *testing.T) {
 	mainToolsAssertJSON(t, requests[1].Messages[1]["tool_calls"], []map[string]any{mainToolsCall("chat-self", "{}")})
 	output := mainToolsOutput(t, requests[1].Messages[2], "chat-self")
 	if output["id"] != string(result.AgentID) || output["request_status"] != "waiting" || output["state_version"] != float64(2) {
-		t.Fatalf("chat只读工具没有查询同一个内存Agent: %+v", output)
+		t.Fatalf("chat只读工具没有查询同一个持久Agent: %+v", output)
 	}
 }

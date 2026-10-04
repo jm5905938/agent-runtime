@@ -23,40 +23,59 @@ func modelWorkPending(ctx context.Context, runtime *core.Runtime) (bool, error) 
 		if err != nil {
 			return false, err
 		}
-		for _, delivery := range query.Deliveries {
-			if deliveryNeedsModel(agent, delivery) {
-				return true, nil
-			}
-		}
-		if queuedInputNeedsModel(agent, query.Deliveries) {
+		if queryNeedsModel(query) {
 			return true, nil
-		}
-		for _, action := range query.Actions {
-			if agent.Definition == (domain.DefinitionRef{ID: "main", Version: "1"}) &&
-				action.Action.Request.Type == agentStatusActionType && action.Ready {
-				return true, nil
-			}
-			if action.Action.Request.Type != "model.generate" {
-				continue
-			}
-			if action.Action.Status != domain.ActionStatusPending &&
-				(action.Action.Status != domain.ActionStatusUnknown || action.Action.RecoveryPolicy != domain.RecoveryPolicySafeRetry) {
-				continue
-			}
-			// The handler is deliberately unbound until configuration is loaded.
-			blocked := false
-			for _, reason := range action.BlockedBy {
-				if reason.Code != core.BlockHandlerUnavailable {
-					blocked = true
-					break
-				}
-			}
-			if !blocked {
-				return true, nil
-			}
 		}
 	}
 	return false, nil
+}
+
+func modelWorkPendingForAgent(ctx context.Context, runtime *core.Runtime, agentID domain.ID) (bool, error) {
+	query, err := runtime.QueryAgentContext(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	return queryNeedsModel(query), nil
+}
+
+func queryNeedsModel(query core.AgentQuery) bool {
+	agent := query.Agent
+	if agent.Status != domain.AgentStatusActive {
+		return false
+	}
+	for _, delivery := range query.Deliveries {
+		if deliveryNeedsModel(agent, delivery) {
+			return true
+		}
+	}
+	if queuedInputNeedsModel(agent, query.Deliveries) {
+		return true
+	}
+	for _, action := range query.Actions {
+		if agent.Definition == (domain.DefinitionRef{ID: "main", Version: "1"}) &&
+			action.Action.Request.Type == agentStatusActionType && action.Ready {
+			return true
+		}
+		if action.Action.Request.Type != "model.generate" {
+			continue
+		}
+		if action.Action.Status != domain.ActionStatusPending &&
+			(action.Action.Status != domain.ActionStatusUnknown || action.Action.RecoveryPolicy != domain.RecoveryPolicySafeRetry) {
+			continue
+		}
+		// The handler is deliberately unbound until configuration is loaded.
+		blocked := false
+		for _, reason := range action.BlockedBy {
+			if reason.Code != core.BlockHandlerUnavailable {
+				blocked = true
+				break
+			}
+		}
+		if !blocked {
+			return true
+		}
+	}
+	return false
 }
 
 func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
@@ -65,6 +84,9 @@ func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) b
 	}
 	if delivery.Event.Type == "main.request" {
 		return true
+	}
+	if waitingResolutionMatches(agent, delivery) {
+		return delivery.Event.Payload["decision"] == string(core.ResolutionRetry)
 	}
 	if !waitingResultMatches(agent, delivery) {
 		return false
@@ -83,8 +105,17 @@ func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) b
 }
 
 func waitingResultMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
+	return delivery.Event.Type == "action.result" && waitingActionMatches(agent, delivery)
+}
+
+func waitingResolutionMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
+	return delivery.Event.Type == core.ActionResolutionEventType && delivery.Event.Payload["action_type"] == "model.generate" &&
+		waitingActionMatches(agent, delivery)
+}
+
+func waitingActionMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
 	if !delivery.Ready || agent.Definition != (domain.DefinitionRef{ID: "main", Version: "1"}) ||
-		delivery.Event.Type != "action.result" || agent.State["request_status"] != "waiting" {
+		agent.State["request_status"] != "waiting" {
 		return false
 	}
 	payload := delivery.Event.Payload
@@ -123,6 +154,9 @@ func queuedInputNeedsModel(agent core.AgentSnapshot, deliveries []core.DeliveryQ
 		if waitingResultMatches(agent, delivery) && delivery.Event.Payload["action_type"] == "model.generate" {
 			status := delivery.Event.Payload["status"]
 			resultPending = resultPending || status == "succeeded" || status == "failed"
+		}
+		if waitingResolutionMatches(agent, delivery) && delivery.Event.Payload["decision"] == string(core.ResolutionAbandon) {
+			resultPending = true
 		}
 	}
 	return queued && resultPending

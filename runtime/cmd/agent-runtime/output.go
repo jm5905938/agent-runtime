@@ -3,6 +3,7 @@ package main
 import (
 	"agent-runtime/cli"
 	"agent-runtime/core"
+	"agent-runtime/domain"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,20 @@ func writeCommandResult(output io.Writer, result cli.Result) error {
 			submission.Delivery.ExecutionID, submission.Delivery.Status, submission.Duplicate)
 	case "retry":
 		fmt.Fprintf(&text, "agent: %s\nevent: %s\ndelivery: pending\n", result.Retry.AgentID, result.Retry.EventID)
+	case "resolve":
+		receipt := result.Resolution
+		fmt.Fprintf(&text, "action: %s\ndecision: %s\nreason: %s\nagent: %s\nevent: %s\ndelivery: %s\nduplicate: %t\n",
+			receipt.Resolution.ActionID, receipt.Resolution.Decision, receipt.Resolution.Reason,
+			receipt.Delivery.Key.AgentID, receipt.Delivery.Key.EventID, receipt.Delivery.Status, receipt.Duplicate)
+		switch receipt.Delivery.Status {
+		case domain.DeliveryStatusFailed:
+			fmt.Fprintln(&text, "人工处理决定执行失败，先使用retry重新排队，再使用run继续处理")
+			fmt.Fprintf(&text, "retry --agent %s --event-id %s\n", receipt.Delivery.Key.AgentID, receipt.Delivery.Key.EventID)
+		case domain.DeliveryStatusCompleted:
+			fmt.Fprintln(&text, "人工处理决定已处理，可使用run推进剩余工作")
+		default:
+			fmt.Fprintln(&text, "人工处理决定已保存，使用run继续处理")
+		}
 	case "status":
 		if result.Query != nil {
 			if err := writeAgentQuery(&text, *result.Query); err != nil {
@@ -92,6 +107,11 @@ func writeAgentQuery(output *strings.Builder, query core.AgentQuery) error {
 	for _, item := range query.Actions {
 		if err := writeJSONValue(output, "action", item.Action); err != nil {
 			return err
+		}
+		if item.Resolution != nil {
+			if err := writeJSONValue(output, "resolution", item.Resolution); err != nil {
+				return err
+			}
 		}
 		fmt.Fprintf(output, "ready: %t\n", item.Ready)
 		for _, attempt := range item.Attempts {

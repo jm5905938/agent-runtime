@@ -67,12 +67,12 @@ func TestChatCommandUsesEnvAndRealPython(t *testing.T) {
 	config := chatTestConfig(t, server.URL)
 	pythonArgs := chatTestPython(t)
 	for _, asJSON := range []bool{false, true} {
-		args := append([]string{"chat", "--message", "你好\n世界", "--env-file", config}, pythonArgs...)
+		args := append([]string{"chat", "--data-dir", t.TempDir(), "--message", "你好\n世界", "--env-file", config}, pythonArgs...)
 		if asJSON {
 			args = append(args, "--json")
 		}
 		var stdout, stderr bytes.Buffer
-		code := runCommandWithBackend(context.Background(), args, &stdout, &stderr, nil)
+		code := runCommandWithBackend(context.Background(), args, &stdout, &stderr, openCommandBackend)
 		if code != 0 || stderr.Len() != 0 {
 			t.Fatalf("chat失败: code=%d stderr=%s", code, stderr.String())
 		}
@@ -101,7 +101,7 @@ func TestChatCommandReportsModelFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	config := chatTestConfig(t, server.URL)
-	args := append([]string{"chat", "--message", "你好", "--env-file", config, "--json"}, chatTestPython(t)...)
+	args := append([]string{"chat", "--data-dir", t.TempDir(), "--message", "你好", "--env-file", config, "--json"}, chatTestPython(t)...)
 	var stdout, stderr bytes.Buffer
 	if code := runCommand(context.Background(), args, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
 		t.Fatalf("模型失败仍报告成功: code=%d stdout=%s", code, stdout.String())
@@ -114,8 +114,7 @@ func TestChatCommandReportsModelFailure(t *testing.T) {
 
 func TestChatCommandValidatesArgumentsAndConfiguration(t *testing.T) {
 	for _, args := range [][]string{
-		{"chat"}, {"chat", "--message", "hello", "--data-dir", "data"},
-		{"chat", "--message", "hello", "--agent", "agent"},
+		{"chat", "--json"},
 		{"chat", "--message", "hello", "--event-id", "event"},
 		{"chat", "--message", "hello", "--name", "main"},
 		{"--env-file", "config", "--message", "hello"},
@@ -130,7 +129,7 @@ func TestChatCommandValidatesArgumentsAndConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := runCommand(context.Background(), []string{"chat", "--message", "hello", "--env-file", config, "--json"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
+	if code := runCommand(context.Background(), []string{"chat", "--data-dir", t.TempDir(), "--message", "hello", "--env-file", config, "--json"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
 		t.Fatalf("缺少配置仍成功: code=%d", code)
 	}
 	assertCommandError(t, stderr.Bytes(), "operation", 1)

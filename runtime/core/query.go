@@ -23,6 +23,7 @@ const (
 	BlockRecoveryRequired      QueryBlockCode = "recovery_required"
 	BlockAgentWaiting          QueryBlockCode = "agent_waiting_result"
 	BlockEarlierInput          QueryBlockCode = "earlier_input_pending"
+	BlockActionResolved        QueryBlockCode = "action_resolved"
 )
 
 type BlockReason struct {
@@ -47,10 +48,11 @@ type DeliveryQuery struct {
 }
 
 type ActionQuery struct {
-	Action    domain.ActionRecord    `json:"action"`
-	Attempts  []domain.ActionAttempt `json:"attempts"`
-	Ready     bool                   `json:"ready"`
-	BlockedBy []BlockReason          `json:"blocked_by"`
+	Action     domain.ActionRecord    `json:"action"`
+	Attempts   []domain.ActionAttempt `json:"attempts"`
+	Ready      bool                   `json:"ready"`
+	BlockedBy  []BlockReason          `json:"blocked_by"`
+	Resolution *ActionResolution      `json:"resolution,omitempty"`
 }
 
 func (r *Runtime) Agents() ([]AgentSnapshot, error) {
@@ -132,6 +134,12 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 	if err != nil {
 		return AgentQuery{}, err
 	}
+	resolutionEvents := make(map[domain.ID]domain.Event)
+	for _, delivery := range result.Deliveries {
+		if delivery.Event.Type == ActionResolutionEventType {
+			resolutionEvents[delivery.Event.ID] = delivery.Event
+		}
+	}
 	for _, action := range actions {
 		if action.AgentID != agentID {
 			continue
@@ -149,6 +157,9 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 			query.Attempts[i] = attempt
 		}
 		sort.Slice(query.Attempts, func(i, j int) bool { return query.Attempts[i].Number < query.Attempts[j].Number })
+		if event, exists := resolutionEvents[actionResolutionEventID(query.Action.Request.ID)]; exists {
+			query.Resolution = resolutionFromEvent(query.Action, event)
+		}
 		r.setActionReadiness(&query, result.Agent)
 		result.Actions = append(result.Actions, query)
 	}
@@ -215,6 +226,10 @@ func (q *DeliveryQuery) setReadiness(agent AgentSnapshot, running bool) {
 }
 
 func (r *Runtime) setActionReadiness(q *ActionQuery, agent AgentSnapshot) {
+	if q.Resolution != nil {
+		q.BlockedBy = append(q.BlockedBy, BlockReason{BlockActionResolved, "已登记人工处理决定，原调用保留unknown记录"})
+		return
+	}
 	switch q.Action.Status {
 	case domain.ActionStatusSucceeded, domain.ActionStatusFailed:
 		return

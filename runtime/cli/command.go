@@ -23,12 +23,15 @@ type UsageError struct {
 func (e *UsageError) Error() string { return e.Message }
 
 type Request struct {
-	Command    string    `json:"command"`
-	AgentID    domain.ID `json:"agent_id"`
-	EventID    domain.ID `json:"event_id"`
-	Message    string    `json:"message"`
-	Name       string    `json:"name"`
-	Definition string    `json:"definition,omitempty"`
+	Command    string                  `json:"command"`
+	AgentID    domain.ID               `json:"agent_id"`
+	EventID    domain.ID               `json:"event_id"`
+	Message    string                  `json:"message"`
+	Name       string                  `json:"name"`
+	Definition string                  `json:"definition,omitempty"`
+	ActionID   domain.ID               `json:"action_id,omitempty"`
+	Decision   core.ResolutionDecision `json:"decision,omitempty"`
+	Reason     string                  `json:"reason,omitempty"`
 }
 
 type Application struct {
@@ -39,14 +42,15 @@ type Application struct {
 }
 
 type Result struct {
-	Command         string               `json:"command"`
-	Agent           *core.AgentSnapshot  `json:"agent,omitempty"`
-	Submission      *Submission          `json:"submission,omitempty"`
-	Retry           *domain.DeliveryKey  `json:"retry,omitempty"`
-	Agents          []core.AgentSnapshot `json:"agents"`
-	Query           *core.AgentQuery     `json:"query,omitempty"`
-	Run             *RunResult           `json:"run,omitempty"`
-	StartupRecovery core.RecoveryReport  `json:"startup_recovery"`
+	Command         string                        `json:"command"`
+	Agent           *core.AgentSnapshot           `json:"agent,omitempty"`
+	Submission      *Submission                   `json:"submission,omitempty"`
+	Retry           *domain.DeliveryKey           `json:"retry,omitempty"`
+	Resolution      *core.ActionResolutionReceipt `json:"resolution,omitempty"`
+	Agents          []core.AgentSnapshot          `json:"agents"`
+	Query           *core.AgentQuery              `json:"query,omitempty"`
+	Run             *RunResult                    `json:"run,omitempty"`
+	StartupRecovery core.RecoveryReport           `json:"startup_recovery"`
 }
 
 type Submission struct {
@@ -220,6 +224,10 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 		key := domain.DeliveryKey{AgentID: request.AgentID, EventID: request.EventID}
 		err = runtime.Retry(ctx, key)
 		result.Retry = &key
+	case "resolve":
+		receipt, resolveErr := runtime.ResolveAction(ctx, request.ActionID, request.Decision, request.Reason)
+		err = resolveErr
+		result.Resolution = &receipt
 	}
 	return result, err
 }
@@ -237,7 +245,7 @@ func nilBackend(backend core.RecoveryStore) bool {
 
 func (request Request) Validate() error {
 	invalid := func(message string) error { return &UsageError{Message: message} }
-	for _, value := range []string{request.Command, string(request.AgentID), string(request.EventID), request.Message, request.Name, request.Definition} {
+	for _, value := range []string{request.Command, string(request.AgentID), string(request.EventID), request.Message, request.Name, request.Definition, string(request.ActionID), string(request.Decision), request.Reason} {
 		if !utf8.ValidString(value) {
 			return invalid("命令参数必须是有效UTF-8文本")
 		}
@@ -247,6 +255,9 @@ func (request Request) Validate() error {
 	}
 	if request.Command != "init" && request.Definition != "" {
 		return invalid("definition仅适用于init")
+	}
+	if request.Command != "resolve" && (request.ActionID != "" || request.Decision != "" || request.Reason != "") {
+		return invalid("action_id、decision和reason仅适用于resolve")
 	}
 	switch request.Command {
 	case "init":
@@ -271,6 +282,16 @@ func (request Request) Validate() error {
 	case "retry":
 		if request.AgentID == "" || request.EventID == "" || request.Message != "" || request.Name != "" {
 			return invalid("retry仅接受必填的agent_id和event_id")
+		}
+	case "resolve":
+		if strings.TrimSpace(string(request.ActionID)) == "" || request.AgentID != "" || request.EventID != "" || request.Message != "" || request.Name != "" {
+			return invalid("resolve需要action_id，仅接受decision和reason")
+		}
+		if request.Decision != core.ResolutionRetry && request.Decision != core.ResolutionAbandon {
+			return invalid("resolve的decision仅支持retry或abandon")
+		}
+		if strings.TrimSpace(request.Reason) == "" || utf8.RuneCountInString(request.Reason) > 1024 {
+			return invalid("resolve的reason必须为非空白文本，且不超过1024个字符")
 		}
 	default:
 		return invalid(fmt.Sprintf("未知命令%q", request.Command))

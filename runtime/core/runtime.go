@@ -411,6 +411,18 @@ func (r *Runtime) RunUntilIdle() error {
 }
 
 func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
+	return r.runUntilIdleContext(ctx, "")
+}
+
+// 只推进指定agent的事件和action，保留其他agent的待处理工作。
+func (r *Runtime) RunAgentUntilIdleContext(ctx context.Context, agentID domain.ID) error {
+	if agentID == "" {
+		return fmt.Errorf("推进agent: agent id不能为空")
+	}
+	return r.runUntilIdleContext(ctx, agentID)
+}
+
+func (r *Runtime) runUntilIdleContext(ctx context.Context, agentID domain.ID) error {
 	done, err := r.enter()
 	if err != nil {
 		return err
@@ -424,6 +436,15 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 	case <-r.drain:
 	}
 	defer func() { r.drain <- struct{}{} }()
+	if agentID != "" {
+		agent, err := r.store.LoadAgent(ctx, agentID)
+		if err != nil {
+			return err
+		}
+		if agent.Status != domain.AgentStatusActive {
+			return fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
+		}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -437,6 +458,9 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 		}
 		progress := false
 		for _, delivery := range deliveries {
+			if agentID != "" && delivery.Key.AgentID != agentID {
+				continue
+			}
 			if r.isStopping() {
 				return nil
 			}
@@ -463,6 +487,9 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 			return err
 		}
 		for _, action := range actions {
+			if agentID != "" && action.AgentID != agentID {
+				continue
+			}
 			if r.isStopping() {
 				return nil
 			}
