@@ -23,11 +23,12 @@ type UsageError struct {
 func (e *UsageError) Error() string { return e.Message }
 
 type Request struct {
-	Command string    `json:"command"`
-	AgentID domain.ID `json:"agent_id"`
-	EventID domain.ID `json:"event_id"`
-	Message string    `json:"message"`
-	Name    string    `json:"name"`
+	Command    string    `json:"command"`
+	AgentID    domain.ID `json:"agent_id"`
+	EventID    domain.ID `json:"event_id"`
+	Message    string    `json:"message"`
+	Name       string    `json:"name"`
+	Definition string    `json:"definition,omitempty"`
 }
 
 type Application struct {
@@ -161,17 +162,34 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	result = Result{Command: request.Command, Agents: make([]core.AgentSnapshot, 0), StartupRecovery: runtime.RecoveryReport()}
 	switch request.Command {
 	case "init":
+		definition := domain.DefinitionRef{ID: request.Definition, Version: "1"}
+		if definition.ID == "" {
+			definition.ID = "echo"
+		}
 		name := request.Name
 		if name == "" {
-			name = "echo"
+			name = definition.ID
 		}
-		agent, createErr := runtime.CreateAgentContext(ctx, name, domain.DefinitionRef{ID: "echo", Version: "1"}, nil)
+		agent, createErr := runtime.CreateAgentContext(ctx, name, definition, nil)
 		if createErr != nil {
 			return Result{}, createErr
 		}
 		result.Agent = &agent
 	case "submit":
-		event := domain.Event{ID: request.EventID, Type: "echo.request", Payload: map[string]any{"message": request.Message}, CreatedAt: time.Now().UTC()}
+		agent, loadErr := runtime.AgentContext(ctx, request.AgentID)
+		if loadErr != nil {
+			return Result{}, loadErr
+		}
+		var eventType string
+		switch agent.Definition {
+		case domain.DefinitionRef{ID: "echo", Version: "1"}:
+			eventType = "echo.request"
+		case domain.DefinitionRef{ID: "main", Version: "1"}:
+			eventType = "main.request"
+		default:
+			return Result{}, fmt.Errorf("不支持向definition %s@%s提交消息", agent.Definition.ID, agent.Definition.Version)
+		}
+		event := domain.Event{ID: request.EventID, Type: eventType, Payload: map[string]any{"message": request.Message}, CreatedAt: time.Now().UTC()}
 		received, submitErr := runtime.SubmitContext(ctx, request.AgentID, event)
 		if submitErr != nil {
 			return Result{}, submitErr
@@ -219,7 +237,7 @@ func nilBackend(backend core.RecoveryStore) bool {
 
 func (request Request) Validate() error {
 	invalid := func(message string) error { return &UsageError{Message: message} }
-	for _, value := range []string{request.Command, string(request.AgentID), string(request.EventID), request.Message, request.Name} {
+	for _, value := range []string{request.Command, string(request.AgentID), string(request.EventID), request.Message, request.Name, request.Definition} {
 		if !utf8.ValidString(value) {
 			return invalid("命令参数必须是有效UTF-8文本")
 		}
@@ -227,10 +245,16 @@ func (request Request) Validate() error {
 	if request.AgentID != "" && strings.TrimSpace(string(request.AgentID)) == "" || request.EventID != "" && strings.TrimSpace(string(request.EventID)) == "" {
 		return invalid("agent_id和event_id不能仅含空白")
 	}
+	if request.Command != "init" && request.Definition != "" {
+		return invalid("definition仅适用于init")
+	}
 	switch request.Command {
 	case "init":
 		if request.AgentID != "" || request.EventID != "" || request.Message != "" || request.Name != "" && strings.TrimSpace(request.Name) == "" {
-			return invalid("init仅接受非空白name")
+			return invalid("init仅接受definition和非空白name")
+		}
+		if request.Definition != "" && request.Definition != "echo" && request.Definition != "main" {
+			return invalid(fmt.Sprintf("不支持的definition %q，仅支持echo或main", request.Definition))
 		}
 	case "submit":
 		if request.AgentID == "" || request.EventID == "" || request.Name != "" {

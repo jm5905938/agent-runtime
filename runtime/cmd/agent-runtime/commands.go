@@ -102,7 +102,7 @@ func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io
 	}
 	app := cli.Application{
 		Backend: backend.Store, CloseBackend: backend.Close,
-		Bind: func(runtime *core.Runtime) (io.Closer, error) { return bindEcho(runtime, options.python) },
+		Bind: func(runtime *core.Runtime) (io.Closer, error) { return bindPersistent(ctx, runtime, options) },
 	}
 	result, err := app.Execute(ctx, options.request)
 	if err != nil {
@@ -122,12 +122,33 @@ func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io
 	return 0
 }
 
-func bindEcho(runtime *core.Runtime, options pythonrunner.Options) (io.Closer, error) {
-	runner, err := pythonrunner.NewRunner(options)
+func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandOptions) (io.Closer, error) {
+	runner, err := pythonrunner.NewRunner(options.python)
 	if err != nil {
 		return nil, err
 	}
-	return runner, registerEcho(runtime, runner)
+	if err := registerEcho(runtime, runner); err != nil {
+		return runner, err
+	}
+	if err := runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, runner); err != nil {
+		return runner, err
+	}
+	if options.request.Command != "run" {
+		return runner, nil
+	}
+	needed, err := modelWorkPending(ctx, runtime)
+	if err != nil || !needed {
+		return runner, err
+	}
+	config, err := model.LoadConfig(options.envFile)
+	if err != nil {
+		return runner, err
+	}
+	handler, err := model.NewHandler(config)
+	if err != nil {
+		return runner, err
+	}
+	return runner, runtime.Executor().Register("model.generate", handler)
 }
 
 func registerEcho(runtime *core.Runtime, runner core.AgentRunner) error {
@@ -153,6 +174,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	flags.StringVar(&options.request.Message, "message", "hello", "echo消息")
 	flags.StringVar(&options.envFile, "env-file", defaultEnvFile(), "模型配置文件")
 	flags.StringVar(&options.request.Name, "name", "echo", "实例名称")
+	flags.StringVar(&options.request.Definition, "definition", "", "实例定义，echo或main")
 	flags.StringVar(&agentID, "agent", "", "agent id")
 	flags.StringVar(&eventID, "event-id", "", "event id")
 	parse := func(args []string) error {
@@ -196,7 +218,9 @@ func parseCommand(args []string) (commandOptions, error) {
 	case "chat":
 		allowed["message"], allowed["env-file"] = true, true
 	case "init":
-		allowed["name"] = true
+		allowed["name"], allowed["definition"] = true, true
+	case "run":
+		allowed["env-file"] = true
 	case "submit":
 		allowed["agent"], allowed["event-id"], allowed["message"] = true, true, true
 	case "status":
@@ -225,6 +249,14 @@ func parseCommand(args []string) (commandOptions, error) {
 	}
 	options.request.AgentID, options.request.EventID = domain.ID(agentID), domain.ID(eventID)
 	if persistent {
+		if options.request.Command == "init" {
+			if seen["definition"] && options.request.Definition == "" {
+				return options, &cli.UsageError{Message: "definition仅支持echo或main"}
+			}
+			if !seen["name"] && options.request.Definition != "" {
+				options.request.Name = options.request.Definition
+			}
+		}
 		if options.request.Command != "init" {
 			options.request.Name = ""
 		}
@@ -251,7 +283,7 @@ func requestedJSON(args []string) bool {
 			if hasValue {
 				asJSON, _ = strconv.ParseBool(value)
 			}
-		case "message", "agent", "event-id", "name", "data-dir", "python", "python-source", "timeout", "env-file":
+		case "message", "agent", "event-id", "name", "definition", "data-dir", "python", "python-source", "timeout", "env-file":
 			if !hasValue {
 				i++
 			}
@@ -308,10 +340,11 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
 
 命令:
   chat     --message <文本> [--env-file <文件>] 调用llm并显示main agent回复
-  init     [--name echo]                       创建echo agent
+  init     [--definition echo|main] [--name <名称>]
+                                              创建持久agent，默认echo
   submit   --agent <id> --event-id <id> --message <文本>
                                               接收消息，不执行
-  run                                         推进已有工作并报告剩余状态
+  run      [--env-file <文件>]                推进已有工作并报告剩余状态
   status   [--agent <id>]                      查询agent列表或完整记录
   retry    --agent <id> --event-id <id>         重新排队失败的delivery，不执行
 
@@ -321,12 +354,14 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
   --python <路径>        python可执行文件，默认python3，需要3.12+
   --python-source <目录> 包含agent_runtime的源码目录
   --timeout <时长>       每次python调用期限，默认30s
-  --env-file <文件>      chat的模型配置文件，默认项目根目录的.env
+  --env-file <文件>      chat或run的模型配置文件，默认项目根目录的.env
   --help                 显示帮助
 
 无子命令时运行一次内存echo，默认消息hello，进程退出后数据丢失
 chat每次处理一条输入，进程退出后数据丢失，模型请求期限由LLM_TIMEOUT配置，默认60s
 持久子命令启动时独占数据库并恢复中断记录，只有run执行待办
+创建、提交和查询main不需要模型配置；run有待执行模型工作时才加载配置
+main的model.generate结果未知时不会自动重试，避免重复调用模型
 status也会执行启动恢复，但不会运行agent或action
 退出码: 0命令正常结束，1操作或存储错误，2参数错误
 `
