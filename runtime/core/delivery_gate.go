@@ -68,3 +68,13 @@ func deliveryBlockedBy(runner AgentRunner, agent AgentSnapshot, event domain.Eve
 	}
 	return append([]BlockReason(nil), gate.DeliveryBlockedBy(agent, cloneEvent(event), events)...), nil
 }
+
+func prepareDelivery(ctx context.Context, runner AgentRunner, agent AgentSnapshot, event domain.Event) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("准备投递异常: %v", recovered)
+		}
+	}()
+	agent.State = cloneMap(agent.State)
+	return runner.(DeliveryPreparer).PrepareDelivery(ctx, agent, cloneEvent(event))
+}

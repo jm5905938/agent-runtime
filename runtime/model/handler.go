@@ -80,6 +80,13 @@ func NewHandler(config Config) (*Handler, error) {
 }
 
 func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
+	return handler.ExecuteContext(context.Background(), action)
+}
+
+func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("模型请求被取消: %w", err)
+	}
 	messages, err := actionMessages(action.Payload["messages"])
 	if err != nil {
 		return nil, err
@@ -97,7 +104,7 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 	if err != nil {
 		return nil, errors.New("模型请求编码失败")
 	}
-	request, err := http.NewRequest(http.MethodPost, handler.endpoint, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, handler.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.New("模型请求创建失败")
 	}
@@ -105,6 +112,9 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 	request.Header.Set("Content-Type", "application/json")
 	response, err := handler.client.Do(request)
 	if err != nil {
+		if cancellation := ctx.Err(); cancellation != nil {
+			return nil, fmt.Errorf("模型请求被取消: %w", cancellation)
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, errors.New("模型请求超时")
 		}
@@ -116,6 +126,9 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
+		if cancellation := ctx.Err(); cancellation != nil {
+			return nil, fmt.Errorf("模型回复读取被取消: %w", cancellation)
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, errors.New("模型回复读取超时")
 		}

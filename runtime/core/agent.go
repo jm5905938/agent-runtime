@@ -46,6 +46,12 @@ type DeliveryGate interface {
 	DeliveryBlockedBy(agent AgentSnapshot, event domain.Event, earlier []domain.Event) []BlockReason
 }
 
+// DeliveryPreparer在投递就绪后、领取execution前准备依赖。
+// 准备失败时保留pending，不创建执行或消耗尝试次数。
+type DeliveryPreparer interface {
+	PrepareDelivery(context.Context, AgentSnapshot, domain.Event) error
+}
+
 // 适配层区分业务错误、运行错误和中断
 type RunnerFailure interface {
 	error

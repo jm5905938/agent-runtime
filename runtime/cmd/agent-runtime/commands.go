@@ -14,6 +14,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -27,10 +28,14 @@ type commandOptions struct {
 }
 
 func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return runCommandWithBackend(ctx, args, stdout, stderr, openCommandBackend)
+	return runCommandWithStorage(ctx, args, stdout, stderr, openCommandBackend, openCommandIngress)
 }
 
 func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io.Writer, open backendOpener) int {
+	return runCommandWithStorage(ctx, args, stdout, stderr, open, nil)
+}
+
+func runCommandWithStorage(ctx context.Context, args []string, stdout, stderr io.Writer, open backendOpener, input inputOpener) int {
 	options, err := parseCommand(args)
 	if errors.Is(err, flag.ErrHelp) {
 		if _, err := io.WriteString(stdout, commandHelp); err != nil {
@@ -90,21 +95,26 @@ func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io
 		}
 		return 0
 	}
-	if open == nil {
-		return reportError(cli.ErrBackendUnavailable)
-	}
-	backend, err := open(ctx, options.dataDir)
-	if err != nil {
-		if backend.Close != nil {
-			err = errors.Join(err, backend.Close())
+	var result cli.Result
+	if options.request.Command == "submit" && input != nil {
+		result, err = submitCommand(ctx, options, input)
+	} else {
+		if open == nil {
+			return reportError(cli.ErrBackendUnavailable)
 		}
-		return reportError(err)
+		backend, openErr := open(ctx, options.dataDir)
+		if openErr != nil {
+			if backend.Close != nil {
+				openErr = errors.Join(openErr, backend.Close())
+			}
+			return reportError(openErr)
+		}
+		app := cli.Application{
+			Backend: backend.Store, CloseBackend: backend.Close,
+			Bind: func(runtime *core.Runtime) (io.Closer, error) { return bindPersistent(ctx, runtime, options) },
+		}
+		result, err = app.Execute(ctx, options.request)
 	}
-	app := cli.Application{
-		Backend: backend.Store, CloseBackend: backend.Close,
-		Bind: func(runtime *core.Runtime) (io.Closer, error) { return bindPersistent(ctx, runtime, options) },
-	}
-	result, err := app.Execute(ctx, options.request)
 	if err != nil {
 		return reportError(err)
 	}
@@ -124,10 +134,50 @@ func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io
 
 func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandOptions) (io.Closer, error) {
 	runner := &persistentPythonRunner{}
+	var modelMu sync.Mutex
+	modelReady := false
+	ensureModel := func(ctx context.Context) error {
+		modelMu.Lock()
+		defer modelMu.Unlock()
+		if modelReady {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		config, err := model.LoadConfig(options.envFile)
+		if err != nil {
+			return err
+		}
+		handler, err := model.NewHandler(config)
+		if err != nil {
+			return err
+		}
+		worker, err := pythonrunner.NewRunner(promptRunnerOptions(options.python, config))
+		if err != nil {
+			return err
+		}
+		if err := runtime.Executor().Register("model.generate", handler); err != nil {
+			return errors.Join(err, worker.Close())
+		}
+		if err := runner.replace(worker); err != nil {
+			return err
+		}
+		modelReady = true
+		return nil
+	}
 	if err := registerEcho(runtime, runner); err != nil {
 		return runner, err
 	}
-	if err := registerMain(runtime, runner); err != nil {
+	if err := runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, mainAgentRunner{
+		AgentRunner: runner,
+		prepare: func(ctx context.Context, agent core.AgentSnapshot, event domain.Event) error {
+			if options.request.Command == "run" && deliveryNeedsModel(agent, core.DeliveryQuery{Ready: true, Event: event}) {
+				return ensureModel(ctx)
+			}
+			return nil
+		},
+	}); err != nil {
 		return runner, err
 	}
 	if err := registerAgentStatus(ctx, runtime); err != nil {
@@ -139,32 +189,31 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 			return runner, err
 		}
 		if needed {
-			config, err := model.LoadConfig(options.envFile)
-			if err != nil {
+			if err := ensureModel(ctx); err != nil {
 				return runner, err
 			}
-			handler, err := model.NewHandler(config)
-			if err != nil {
-				return runner, err
-			}
-			if err := runtime.Executor().Register("model.generate", handler); err != nil {
-				return runner, err
-			}
-			options.python = promptRunnerOptions(options.python, config)
 		}
 	}
-	var err error
-	runner.Runner, err = pythonrunner.NewRunner(options.python)
-	return runner, err
+	if !modelReady {
+		worker, err := pythonrunner.NewRunner(options.python)
+		if err != nil {
+			return runner, err
+		}
+		return runner, runner.replace(worker)
+	}
+	return runner, nil
 }
 
 // Definitions must be registered for preflight queries before the worker is
 // configured. No execution can start until binding and preflight succeed.
 type persistentPythonRunner struct {
 	*pythonrunner.Runner
+	mu sync.RWMutex
 }
 
 func (runner *persistentPythonRunner) Run(input core.ExecutionContext) (core.ExecutionResult, error) {
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
 	if runner.Runner == nil {
 		return core.ExecutionResult{}, errors.New("python runner尚未配置")
 	}
@@ -172,6 +221,8 @@ func (runner *persistentPythonRunner) Run(input core.ExecutionContext) (core.Exe
 }
 
 func (runner *persistentPythonRunner) RunContext(ctx context.Context, input core.ExecutionContext) (core.ExecutionResult, error) {
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
 	if runner.Runner == nil {
 		return core.ExecutionResult{}, errors.New("python runner尚未配置")
 	}
@@ -179,10 +230,24 @@ func (runner *persistentPythonRunner) RunContext(ctx context.Context, input core
 }
 
 func (runner *persistentPythonRunner) Close() error {
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
 	if runner.Runner == nil {
 		return nil
 	}
 	return runner.Runner.Close()
+}
+
+func (runner *persistentPythonRunner) replace(worker *pythonrunner.Runner) error {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.Runner != nil {
+		if err := runner.Runner.Close(); err != nil {
+			return errors.Join(err, worker.Close())
+		}
+	}
+	runner.Runner = worker
+	return nil
 }
 
 func registerEcho(runtime *core.Runtime, runner core.AgentRunner) error {
@@ -383,7 +448,7 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
   retry    --agent <id> --event-id <id>         重新排队失败的delivery，不执行
 
 公共参数可放在命令前后:
-  --data-dir <目录>       持久子命令必填，自动创建目录，数据保存到store.db
+  --data-dir <目录>       持久子命令必填，init创建目录，数据保存到store.db
   --json                 成功结果写stdout，结构化错误写stderr
   --python <路径>        python可执行文件，默认python3，需要3.12+
   --python-source <目录> 包含agent_runtime的源码目录
@@ -393,7 +458,8 @@ const commandHelp = `用法: agent-runtime [--message hello] [--json]
 
 无子命令时运行一次内存echo，默认消息hello，进程退出后数据丢失
 chat每次处理一条输入，进程退出后数据丢失，模型请求期限由LLM_TIMEOUT配置，默认60s
-持久子命令启动时独占数据库并恢复中断记录，只有run执行待办
+submit只持久化输入，可在run执行期间提交
+其余持久子命令启动时独占数据库并恢复中断记录，只有run执行待办
 创建、提交和查询main不需要模型配置；run有待执行模型工作时才加载配置
 main的model.generate结果未知时不会自动重试，避免重复调用模型
 status也会执行启动恢复，但不会运行agent或action

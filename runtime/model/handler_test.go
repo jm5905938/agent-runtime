@@ -3,7 +3,9 @@ package model
 import (
 	"agent-runtime/core"
 	"agent-runtime/domain"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -262,6 +264,9 @@ func TestHandlerTimeoutCoversHeadersAndBody(t *testing.T) {
 			result, err := handler.Execute(modelAction("你好"))
 			if err == nil || !strings.Contains(err.Error(), "超时") || result != nil || time.Since(start) > time.Second {
 				t.Fatalf("请求没有在限制时间内结束: %v", err)
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("HTTP客户端超时不应冒充调用者取消: %v", err)
 			}
 			if strings.Contains(err.Error(), testKey) || strings.Contains(err.Error(), server.URL) {
 				t.Fatal("超时错误包含配置值")

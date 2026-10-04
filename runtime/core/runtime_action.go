@@ -42,20 +42,24 @@ func (r *Runtime) executeAction(ctx context.Context, record domain.ActionRecord)
 		}
 		return err
 	}
-	output, cause, unknown := callHandler(handler, claim.Record.Request)
+	output, cause, unknown := callHandler(ctx, handler, claim.Record.Request)
 	if cause == nil {
 		if err := codec.ValidateData(output); err != nil {
 			cause, unknown = fmt.Errorf("handler返回不支持的业务数据: %w", err), true
 		}
 	}
 	if unknown {
+		kind := domain.ErrorKindUnknown
+		if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+			kind = domain.ErrorKindInterrupted
+		}
 		err := r.recordActionUnknown(ctx, claim.Token, domain.Failure{
-			Kind: domain.ErrorKindUnknown, Message: recordText(cause.Error()),
+			Kind: kind, Message: recordText(cause.Error()),
 		})
 		if err != nil {
-			return &storeFailureError{cause: err}
+			return &storeFailureError{cause: errors.Join(err, ctx.Err())}
 		}
-		return nil
+		return ctx.Err()
 	}
 	record = claim.Record
 	result := domain.ActionResult{ActionID: record.Request.ID, EventID: record.ResultEventID,
@@ -73,11 +77,14 @@ func (r *Runtime) executeAction(ctx context.Context, record domain.ActionRecord)
 		payload["result"] = cloneMap(result.Output)
 	}
 	event := domain.Event{ID: record.ResultEventID, Type: "action.result", Payload: payload, CreatedAt: time.Now().UTC()}
-	_, err = r.store.CompleteAction(ctx, ActionCompletion{Token: claim.Token, Result: result, Event: event})
+	// 外部调用已经得出结果，调用者取消不应使已确认的结果丢失。
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, err = r.store.CompleteAction(cleanup, ActionCompletion{Token: claim.Token, Result: result, Event: event})
 	if err != nil {
-		return &storeFailureError{cause: err}
+		return &storeFailureError{cause: errors.Join(err, ctx.Err())}
 	}
-	return err
+	return ctx.Err()
 }
 
 func (r *Runtime) recordActionUnknown(ctx context.Context, token ActionToken, failure domain.Failure) error {
@@ -86,12 +93,18 @@ func (r *Runtime) recordActionUnknown(ctx context.Context, token ActionToken, fa
 	return r.store.RecordActionUnknown(cleanup, token, failure)
 }
 
-func callHandler(handler ActionHandler, action domain.Action) (output map[string]any, err error, unknown bool) {
+func callHandler(ctx context.Context, handler ActionHandler, action domain.Action) (output map[string]any, err error, unknown bool) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			output, err, unknown = nil, fmt.Errorf("handler异常: %v", recovered), true
 		}
 	}()
-	output, err = handler.Execute(cloneActions([]domain.Action{action})[0])
+	action = cloneActions([]domain.Action{action})[0]
+	if contextual, ok := handler.(ContextActionHandler); ok {
+		output, err = contextual.ExecuteContext(ctx, action)
+	} else {
+		output, err = handler.Execute(action)
+	}
+	unknown = errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 	return
 }

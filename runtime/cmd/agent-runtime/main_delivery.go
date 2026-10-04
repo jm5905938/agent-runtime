@@ -8,6 +8,14 @@ import (
 
 type mainAgentRunner struct {
 	core.AgentRunner
+	prepare func(context.Context, core.AgentSnapshot, domain.Event) error
+}
+
+func (runner mainAgentRunner) PrepareDelivery(ctx context.Context, agent core.AgentSnapshot, event domain.Event) error {
+	if runner.prepare != nil {
+		return runner.prepare(ctx, agent, event)
+	}
+	return nil
 }
 
 func (runner mainAgentRunner) RunContext(ctx context.Context, input core.ExecutionContext) (core.ExecutionResult, error) {
@@ -33,5 +41,5 @@ func (runner mainAgentRunner) DeliveryBlockedBy(agent core.AgentSnapshot, event 
 }
 
 func registerMain(runtime *core.Runtime, runner core.AgentRunner) error {
-	return runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, mainAgentRunner{runner})
+	return runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, mainAgentRunner{AgentRunner: runner})
 }

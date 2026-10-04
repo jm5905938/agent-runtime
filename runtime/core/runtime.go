@@ -213,6 +213,18 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 			return ExecutionResult{}, &deliveryNotReadyError{blocked: blocked}
 		}
 	}
+	if _, ok := runner.(DeliveryPreparer); ok {
+		event, err := r.store.LoadEvent(ctx, key.EventID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if err := prepareDelivery(ctx, runner, snapshotAgent(*agent), *event); err != nil {
+			return ExecutionResult{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return ExecutionResult{}, err
+		}
+	}
 	claim, err := r.store.ClaimExecution(ctx, key)
 	if err != nil {
 		return r.resolveClaimError(ctx, key, err)

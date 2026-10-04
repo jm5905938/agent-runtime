@@ -150,13 +150,20 @@ func (s *Session) LoadAgent(
 	}
 
 	defer s.backend.unlock()
+	return loadAgent(ctx, s.backend.db, agentID)
+}
 
+type agentReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func loadAgent(ctx context.Context, reader agentReader, agentID domain.ID) (*domain.AgentInstance, error) {
 	var agent domain.AgentInstance
 	var status string
 	var stateJSON string
 	var stateVersion string
 
-	err := s.backend.db.QueryRowContext(ctx, `
+	err := reader.QueryRowContext(ctx, `
 		SELECT
 			id,
 			name,

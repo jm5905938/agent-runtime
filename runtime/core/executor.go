@@ -3,6 +3,7 @@ package core
 import (
 	"agent-runtime/codec"
 	"agent-runtime/domain"
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -13,6 +14,13 @@ var ErrActionRequiresStore = errors.New("恢复runtime的action必须通过store
 // 外部能力接口
 type ActionHandler interface {
 	Execute(action domain.Action) (map[string]any, error)
+}
+
+// 可选的上下文接口；取消后无法确认外部结果时应返回context取消或超时错误。
+// 已确认的成功或失败结果仍应照常返回，runtime负责保存结果后停止运行。
+type ContextActionHandler interface {
+	ActionHandler
+	ExecuteContext(ctx context.Context, action domain.Action) (map[string]any, error)
 }
 
 // 原样返回action数据
