@@ -16,25 +16,27 @@ var (
 	ErrDeliveryFailed      = errors.New("delivery失败，需要显式重试")
 	ErrAgentUnavailable    = errors.New("agent不可用")
 	ErrExecutionFailed     = errors.New("execution失败")
+	ErrDeliveryNotReady    = errors.New("delivery暂时不能执行")
 )
 
 // 事件、action、结果事件的执行闭环
 type Runtime struct {
-	store       StateStore
-	lifecycle   LifecycleManager
-	executor    *Executor
-	mu          sync.Mutex
-	definitions map[domain.DefinitionRef]AgentRunner
-	drain       chan struct{}
-	session     RecoverySession
-	recovery    RecoveryReport
-	lifeMu      sync.Mutex
-	stopping    bool
-	closed      bool
-	inflight    int
-	stop        chan struct{}
-	drained     chan struct{}
-	closeGate   chan struct{}
+	store          StateStore
+	lifecycle      LifecycleManager
+	executor       *Executor
+	mu             sync.Mutex
+	definitions    map[domain.DefinitionRef]AgentRunner
+	executionGates map[domain.ID]*sync.Mutex
+	drain          chan struct{}
+	session        RecoverySession
+	recovery       RecoveryReport
+	lifeMu         sync.Mutex
+	stopping       bool
+	closed         bool
+	inflight       int
+	stop           chan struct{}
+	drained        chan struct{}
+	closeGate      chan struct{}
 }
 
 func NewRuntime() *Runtime {
@@ -52,7 +54,7 @@ func NewRuntimeWithStore(store StateStore) (*Runtime, error) {
 }
 
 func newRuntime(store StateStore) *Runtime {
-	runtime := &Runtime{store: store, executor: NewExecutor(), definitions: make(map[domain.DefinitionRef]AgentRunner),
+	runtime := &Runtime{store: store, executor: NewExecutor(), definitions: make(map[domain.DefinitionRef]AgentRunner), executionGates: make(map[domain.ID]*sync.Mutex),
 		drain: make(chan struct{}, 1), stop: make(chan struct{}), drained: make(chan struct{}), closeGate: make(chan struct{}, 1)}
 	runtime.drain <- struct{}{}
 	runtime.closeGate <- struct{}{}
@@ -156,23 +158,8 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	if err != nil {
 		return ExecutionResult{}, &storeFailureError{cause: err}
 	}
-	switch delivery.Status {
-	case domain.DeliveryStatusCompleted:
-		saved, err := r.store.LoadExecution(ctx, delivery.ExecutionID)
-		if err != nil {
-			return ExecutionResult{}, &storeFailureError{cause: err}
-		}
-		if saved.Execution.Result == nil {
-			return ExecutionResult{}, fmt.Errorf("已完成execution %s缺少结果", delivery.ExecutionID)
-		}
-		return cloneResult(*saved.Execution.Result), nil
-	case domain.DeliveryStatusRunning:
-		return ExecutionResult{}, ErrExecutionInProgress
-	case domain.DeliveryStatusFailed:
-		return ExecutionResult{}, ErrDeliveryFailed
-	case domain.DeliveryStatusPending:
-	default:
-		return ExecutionResult{}, fmt.Errorf("投递状态无效%q", delivery.Status)
+	if delivery.Status != domain.DeliveryStatusPending {
+		return r.nonPendingDeliveryResult(ctx, *delivery)
 	}
 	agent, err := r.store.LoadAgent(ctx, key.AgentID)
 	if err != nil {
@@ -187,6 +174,44 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	r.mu.Unlock()
 	if err != nil {
 		return ExecutionResult{}, err
+	}
+	if _, gated := runner.(DeliveryGate); gated {
+		// 门控检查、领取和提交串行化，防止使用另一轮提交前的旧状态。
+		gate := r.executionGate(key.AgentID)
+		if !gate.TryLock() {
+			return ExecutionResult{}, ErrExecutionInProgress
+		}
+		defer gate.Unlock()
+		// 首次读取与拿锁之间，同一投递可能已经完成。
+		delivery, err = r.store.LoadDelivery(ctx, key)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if delivery.Status != domain.DeliveryStatusPending {
+			return r.nonPendingDeliveryResult(ctx, *delivery)
+		}
+		agent, err = r.store.LoadAgent(ctx, key.AgentID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if agent.Status != domain.AgentStatusActive {
+			return ExecutionResult{}, fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
+		}
+		event, err := r.store.LoadEvent(ctx, key.EventID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		earlier, err := r.earlierEvents(ctx, key)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		blocked, err := deliveryBlockedBy(runner, snapshotAgent(*agent), *event, earlier)
+		if err != nil {
+			return ExecutionResult{}, err
+		}
+		if len(blocked) > 0 {
+			return ExecutionResult{}, &deliveryNotReadyError{blocked: blocked}
+		}
 	}
 	claim, err := r.store.ClaimExecution(ctx, key)
 	if err != nil {
@@ -220,6 +245,26 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 		return ExecutionResult{}, &storeFailureError{cause: fmt.Errorf("提交execution %s: %w", claim.Token.ExecutionID, err)}
 	}
 	return cloneResult(committed), nil
+}
+
+func (r *Runtime) nonPendingDeliveryResult(ctx context.Context, delivery domain.Delivery) (ExecutionResult, error) {
+	switch delivery.Status {
+	case domain.DeliveryStatusCompleted:
+		saved, err := r.store.LoadExecution(ctx, delivery.ExecutionID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if saved.Execution.Result == nil {
+			return ExecutionResult{}, fmt.Errorf("已完成execution %s缺少结果", delivery.ExecutionID)
+		}
+		return cloneResult(*saved.Execution.Result), nil
+	case domain.DeliveryStatusRunning:
+		return ExecutionResult{}, ErrExecutionInProgress
+	case domain.DeliveryStatusFailed:
+		return ExecutionResult{}, ErrDeliveryFailed
+	default:
+		return ExecutionResult{}, fmt.Errorf("投递状态无效%q", delivery.Status)
+	}
 }
 
 func (r *Runtime) resolveClaimError(ctx context.Context, key domain.DeliveryKey, cause error) (ExecutionResult, error) {
@@ -391,7 +436,7 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 				return err
 			case err == nil, executionFailure:
 				progress = true
-			case errors.Is(err, ErrExecutionInProgress), errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeliveryFailed):
+			case errors.Is(err, ErrExecutionInProgress), errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeliveryFailed), errors.Is(err, ErrDeliveryNotReady):
 				continue
 			default:
 				return err

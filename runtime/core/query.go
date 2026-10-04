@@ -21,6 +21,8 @@ const (
 	BlockManualUnknown         QueryBlockCode = "manual_unknown"
 	BlockAttemptsExhausted     QueryBlockCode = "attempts_exhausted"
 	BlockRecoveryRequired      QueryBlockCode = "recovery_required"
+	BlockAgentWaiting          QueryBlockCode = "agent_waiting_result"
+	BlockEarlierInput          QueryBlockCode = "earlier_input_pending"
 )
 
 type BlockReason struct {
@@ -107,8 +109,24 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		running = running || delivery.Status == domain.DeliveryStatusRunning
 		result.Deliveries = append(result.Deliveries, query)
 	}
+	r.mu.Lock()
+	runner := r.definitions[agent.Definition]
+	r.mu.Unlock()
+	var earlier []domain.Event
 	for i := range result.Deliveries {
-		result.Deliveries[i].setReadiness(result.Agent, running)
+		query := &result.Deliveries[i]
+		query.setReadiness(result.Agent, running)
+		if query.Delivery.Status == domain.DeliveryStatusPending {
+			blocked, err := deliveryBlockedBy(runner, result.Agent, query.Event, earlier)
+			if err != nil {
+				return AgentQuery{}, err
+			}
+			query.BlockedBy = append(query.BlockedBy, blocked...)
+			query.Ready = len(query.BlockedBy) == 0
+		}
+		if query.Delivery.Status == domain.DeliveryStatusPending || query.Delivery.Status == domain.DeliveryStatusRunning {
+			earlier = append(earlier, query.Event)
+		}
 	}
 	actions, err := r.store.ListActions(ctx)
 	if err != nil {

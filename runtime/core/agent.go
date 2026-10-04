@@ -39,6 +39,13 @@ type ContextAgentRunner interface {
 	RunContext(context.Context, ExecutionContext) (ExecutionResult, error)
 }
 
+// DeliveryGate在领取execution前判断事件是否需要等待；查询使用相同规则。
+// earlier是同一agent按接收顺序排列在当前事件之前的pending或running事件。
+// 实现只读取传入快照，不执行外部操作或修改runtime。
+type DeliveryGate interface {
+	DeliveryBlockedBy(agent AgentSnapshot, event domain.Event, earlier []domain.Event) []BlockReason
+}
+
 // 适配层区分业务错误、运行错误和中断
 type RunnerFailure interface {
 	error
