@@ -17,7 +17,7 @@ import (
 
 func chatTestConfig(t *testing.T, baseURL string) string {
 	t.Helper()
-	for _, key := range []string{"LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT"} {
+	for _, key := range []string{"LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT", "LLM_SYSTEM_PROMPT", "LLM_MAX_PROMPT_CHARS"} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)

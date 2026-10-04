@@ -3,7 +3,7 @@ from OS.runtime.agent import ExecutionContext, ExecutionResult
 
 class CounterAgent:
     """
-    数数 Agent。
+    数数Agent。
     """
 
     async def run(self, context: ExecutionContext) -> ExecutionResult:

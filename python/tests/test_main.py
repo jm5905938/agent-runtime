@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 from agent_runtime import AgentSnapshot, BusinessError, DefinitionRef, Event, ExecutionContext
 from agent_runtime.agents import MainAgent
@@ -35,6 +36,7 @@ def go_json_bytes(value):
 
 class MainTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"LLM_SYSTEM_PROMPT": "", "LLM_MAX_PROMPT_CHARS": ""}))
         self.agent = MainAgent()
 
     def waiting(self, message="hello", state=None):

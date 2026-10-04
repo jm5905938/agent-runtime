@@ -2,15 +2,22 @@ package model
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
-var configKeys = []string{"LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT"}
+const DefaultMaxPromptChars = 100000
+
+const maxSystemPromptBytes = 64 << 10
+
+var configKeys = []string{"LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT", "LLM_SYSTEM_PROMPT", "LLM_MAX_PROMPT_CHARS"}
 
 func LoadConfig(path string) (Config, error) {
 	values, missingFile, err := readConfigFile(path)
@@ -42,7 +49,40 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, errors.New("LLM_TIMEOUT必须是正数时长")
 		}
 	}
-	return Config{BaseURL: values["LLM_BASE_URL"], APIKey: values["LLM_API_KEY"], Model: values["LLM_MODEL"], Timeout: timeout}, nil
+	maxPromptChars := DefaultMaxPromptChars
+	if value := values["LLM_MAX_PROMPT_CHARS"]; value != "" {
+		for _, char := range value {
+			if char < '0' || char > '9' {
+				return Config{}, errors.New("LLM_MAX_PROMPT_CHARS必须是正整数")
+			}
+		}
+		maxPromptChars, err = strconv.Atoi(value)
+		if err != nil || maxPromptChars <= 0 {
+			return Config{}, errors.New("LLM_MAX_PROMPT_CHARS必须是正整数")
+		}
+	}
+	config := Config{
+		BaseURL: values["LLM_BASE_URL"], APIKey: values["LLM_API_KEY"], Model: values["LLM_MODEL"], Timeout: timeout,
+		SystemPrompt: values["LLM_SYSTEM_PROMPT"], MaxPromptChars: maxPromptChars,
+	}
+	if err := validatePromptConfig(config); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+func validatePromptConfig(config Config) error {
+	if !utf8.ValidString(config.SystemPrompt) || strings.ContainsRune(config.SystemPrompt, '\x00') {
+		return errors.New("LLM_SYSTEM_PROMPT必须是有效UTF-8文本且不能包含NUL")
+	}
+	encoded, err := json.Marshal(config.SystemPrompt)
+	if err != nil || len(encoded) > maxSystemPromptBytes {
+		return errors.New("LLM_SYSTEM_PROMPT的JSON编码不能超过64KiB")
+	}
+	if config.MaxPromptChars < 0 {
+		return errors.New("LLM_MAX_PROMPT_CHARS必须是正整数")
+	}
+	return nil
 }
 
 func readConfigFile(path string) (map[string]string, bool, error) {

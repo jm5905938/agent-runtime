@@ -7,6 +7,7 @@ from agent_runtime import AgentSnapshot, BusinessError, DefinitionRef, Event, Ex
 from agent_runtime.agents import MainAgent
 from agent_runtime.agents.main import initial_state
 from agent_runtime.protocol import encode_frame, result_to_wire
+from agent_runtime.prompt import PromptBuilder
 
 
 def tool_call(call_id="call-1", name="agent_status", arguments="{}"):
@@ -29,7 +30,7 @@ def json_bytes(value):
 
 class MainToolTests(unittest.TestCase):
     def setUp(self):
-        self.agent = MainAgent()
+        self.agent = MainAgent(PromptBuilder())
         self.sequence = 0
 
     def context(self, state=None, event_type="main.request", payload=None):
@@ -115,10 +116,10 @@ class MainToolTests(unittest.TestCase):
         self.assertEqual(model_output.actions[0].type, "model.generate")
         self.assertEqual([message["role"] for message in model_output.actions[0].payload["messages"]], ["user", "assistant", "tool"])
         self.assertEqual(json.loads(model_output.actions[0].payload["messages"][-1]["content"]), {"agent_id": "agent-1", "status": "active"})
-        final, output = self.reply(continued, result={"message": "Agent 正在运行"})
+        final, output = self.reply(continued, result={"message": "Agent正在运行"})
         self.assert_finished(final)
         self.assertEqual(output.actions, [])
-        self.assertEqual(final["messages"], continued["pending_messages"] + [{"role": "assistant", "content": "Agent 正在运行"}])
+        self.assertEqual(final["messages"], continued["pending_messages"] + [{"role": "assistant", "content": "Agent正在运行"}])
         self.assertEqual(final["request_execution_id"], request_execution)
         restored = json.loads(json.dumps(final))
         next_state, next_output = self.request("再查一次", restored)
@@ -143,11 +144,11 @@ class MainToolTests(unittest.TestCase):
     def test_failed_tool_becomes_error_message_and_model_continues(self):
         state, _ = self.request()
         state, _ = self.call_tools(state)
-        state, output = self.reply(state, status="failed", error="目标 Agent 不存在")
+        state, output = self.reply(state, status="failed", error="目标Agent不存在")
         self.assertEqual(state["request_status"], "waiting")
         self.assertEqual(output.actions[0].type, "model.generate")
-        self.assertEqual(json.loads(output.actions[0].payload["messages"][-1]["content"]), {"error": "目标 Agent 不存在"})
-        final, _ = self.reply(state, result={"message": "无法找到目标 Agent"})
+        self.assertEqual(json.loads(output.actions[0].payload["messages"][-1]["content"]), {"error": "目标Agent不存在"})
+        final, _ = self.reply(state, result={"message": "无法找到目标Agent"})
         self.assert_finished(final)
         self.assertEqual(final["messages"][-2]["role"], "tool")
 
@@ -436,6 +437,8 @@ class MainToolTests(unittest.TestCase):
                 self.assertEqual(state, saved)
 
     def test_large_history_and_pending_fit_wire_and_failure_retains_history(self):
+        # 单独覆盖协议字节上限，字数上限由prompt测试覆盖。
+        self.agent = MainAgent(PromptBuilder(max_chars=384 * 1024))
         history = []
         for index in range(6):
             history.extend((

@@ -123,10 +123,7 @@ func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io
 }
 
 func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandOptions) (io.Closer, error) {
-	runner, err := pythonrunner.NewRunner(options.python)
-	if err != nil {
-		return nil, err
-	}
+	runner := &persistentPythonRunner{}
 	if err := registerEcho(runtime, runner); err != nil {
 		return runner, err
 	}
@@ -136,22 +133,56 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	if err := registerAgentStatus(ctx, runtime); err != nil {
 		return runner, err
 	}
-	if options.request.Command != "run" {
-		return runner, nil
+	if options.request.Command == "run" {
+		needed, err := modelWorkPending(ctx, runtime)
+		if err != nil {
+			return runner, err
+		}
+		if needed {
+			config, err := model.LoadConfig(options.envFile)
+			if err != nil {
+				return runner, err
+			}
+			handler, err := model.NewHandler(config)
+			if err != nil {
+				return runner, err
+			}
+			if err := runtime.Executor().Register("model.generate", handler); err != nil {
+				return runner, err
+			}
+			options.python = promptRunnerOptions(options.python, config)
+		}
 	}
-	needed, err := modelWorkPending(ctx, runtime)
-	if err != nil || !needed {
-		return runner, err
+	var err error
+	runner.Runner, err = pythonrunner.NewRunner(options.python)
+	return runner, err
+}
+
+// Definitions must be registered for preflight queries before the worker is
+// configured. No execution can start until binding and preflight succeed.
+type persistentPythonRunner struct {
+	*pythonrunner.Runner
+}
+
+func (runner *persistentPythonRunner) Run(input core.ExecutionContext) (core.ExecutionResult, error) {
+	if runner.Runner == nil {
+		return core.ExecutionResult{}, errors.New("python runner尚未配置")
 	}
-	config, err := model.LoadConfig(options.envFile)
-	if err != nil {
-		return runner, err
+	return runner.Runner.Run(input)
+}
+
+func (runner *persistentPythonRunner) RunContext(ctx context.Context, input core.ExecutionContext) (core.ExecutionResult, error) {
+	if runner.Runner == nil {
+		return core.ExecutionResult{}, errors.New("python runner尚未配置")
 	}
-	handler, err := model.NewHandler(config)
-	if err != nil {
-		return runner, err
+	return runner.Runner.RunContext(ctx, input)
+}
+
+func (runner *persistentPythonRunner) Close() error {
+	if runner.Runner == nil {
+		return nil
 	}
-	return runner, runtime.Executor().Register("model.generate", handler)
+	return runner.Runner.Close()
 }
 
 func registerEcho(runtime *core.Runtime, runner core.AgentRunner) error {

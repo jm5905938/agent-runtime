@@ -45,6 +45,6 @@ func acquireOwnership(path string) (*os.File, error) {
 		)
 	}
 
-	// Session.Close 会调用 file.Close，Windows 会自动释放锁
+	// Session.Close会调用file.Close，Windows会自动释放锁
 	return file, nil
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,96 @@ func TestParseConfigQuotedEscapes(t *testing.T) {
 	_, value, err := parseConfigLine(`LLM_MODEL="model\"name\\path\nnext" #模型`)
 	if err != nil || value != "model\"name\\path\nnext" {
 		t.Fatal("双引号转义解析不符")
+	}
+}
+
+func TestLoadConfigPromptSettings(t *testing.T) {
+	clearConfigEnvironment(t)
+	path := writeConfig(t, `LLM_BASE_URL=https://example.com/v1
+LLM_API_KEY=test-key
+LLM_MODEL=test-model
+LLM_SYSTEM_PROMPT="你是主agent。\n记住当前任务。"
+LLM_MAX_PROMPT_CHARS=4321
+`)
+	config, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SystemPrompt != "你是主agent。\n记住当前任务。" || config.MaxPromptChars != 4321 {
+		t.Fatalf("prompt配置解析错误: %#v", config)
+	}
+	t.Setenv("LLM_SYSTEM_PROMPT", "环境中的prompt\n第二行")
+	t.Setenv("LLM_MAX_PROMPT_CHARS", "42")
+	config, err = LoadConfig(path)
+	if err != nil || config.SystemPrompt != "环境中的prompt\n第二行" || config.MaxPromptChars != 42 {
+		t.Fatal("prompt环境变量没有覆盖文件配置")
+	}
+	t.Setenv("LLM_SYSTEM_PROMPT", "")
+	t.Setenv("LLM_MAX_PROMPT_CHARS", "")
+	config, err = LoadConfig(path)
+	if err != nil || config.SystemPrompt != "" || config.MaxPromptChars != DefaultMaxPromptChars {
+		t.Fatal("空prompt配置默认值不符")
+	}
+}
+
+func TestLoadConfigRejectsInvalidPromptLimit(t *testing.T) {
+	clearConfigEnvironment(t)
+	path := writeConfig(t, "LLM_BASE_URL=https://example.com/v1\nLLM_API_KEY=test-key\nLLM_MODEL=test-model\n")
+	for _, limit := range []string{"0", "-1", "+1", "1.5", " 12", "12 ", "\n12", "１", "999999999999999999999999999999"} {
+		t.Run(limit, func(t *testing.T) {
+			t.Setenv("LLM_MAX_PROMPT_CHARS", limit)
+			_, err := LoadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), "LLM_MAX_PROMPT_CHARS") || strings.Contains(err.Error(), "test-key") {
+				t.Fatalf("无效prompt限制没有安全拒绝: %v", err)
+			}
+		})
+	}
+}
+
+func TestSystemPromptValidation(t *testing.T) {
+	clearConfigEnvironment(t)
+	path := writeConfig(t, "LLM_BASE_URL=https://example.com/v1\nLLM_API_KEY=test-key\nLLM_MODEL=test-model\n")
+	boundary := strings.Repeat("a", maxSystemPromptBytes-2)
+	for _, test := range []struct {
+		name   string
+		prompt string
+		valid  bool
+	}{
+		{"empty", "", true},
+		{"multiline unicode", "系统指令\n第二行", true},
+		{"encoded boundary", boundary, true},
+		{"over boundary", boundary + "a", false},
+		{"HTML escaping", strings.Repeat("<", maxSystemPromptBytes/6+1), false},
+		{"invalid utf8", string([]byte{0xff}), false},
+		{"NUL", "private\x00prompt", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.valid {
+				encoded, err := json.Marshal(test.prompt)
+				if err != nil || len(encoded) > maxSystemPromptBytes {
+					t.Fatal("测试中的合法prompt超过编码限制")
+				}
+			}
+			config := Config{BaseURL: "https://example.com/v1", APIKey: "test-key", Model: "test-model", SystemPrompt: test.prompt}
+			_, err := NewHandler(config)
+			if (err == nil) != test.valid {
+				t.Fatalf("NewHandler验证prompt: valid=%v err=%v", test.valid, err)
+			}
+			if strings.ContainsRune(test.prompt, '\x00') {
+				return // Process environments cannot contain NUL.
+			}
+			t.Setenv("LLM_SYSTEM_PROMPT", test.prompt)
+			_, err = LoadConfig(path)
+			if (err == nil) != test.valid {
+				t.Fatalf("LoadConfig验证prompt: valid=%v err=%v", test.valid, err)
+			}
+		})
+	}
+}
+
+func TestNewHandlerRejectsNegativePromptLimit(t *testing.T) {
+	_, err := NewHandler(Config{BaseURL: "https://example.com/v1", APIKey: "test-key", Model: "test-model", MaxPromptChars: -1})
+	if err == nil || !strings.Contains(err.Error(), "LLM_MAX_PROMPT_CHARS") {
+		t.Fatal("负数prompt限制没有拒绝")
 	}
 }

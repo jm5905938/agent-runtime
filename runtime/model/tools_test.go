@@ -24,7 +24,7 @@ func testToolDefinition() map[string]any {
 	return map[string]any{
 		"type": "function",
 		"function": map[string]any{
-			"name": "agent_status", "description": "查询 Agent 状态", "strict": false,
+			"name": "agent_status", "description": "查询Agent状态", "strict": false,
 			"parameters": map[string]any{
 				"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}},
 				"required": []any{"agent_id"}, "additionalProperties": false,

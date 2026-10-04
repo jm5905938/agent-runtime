@@ -4,7 +4,7 @@ from OS.runtime.agent import ExecutionContext, ExecutionResult
 
 class EchoAgent:
     """
-    发出 echo 请求，在后续事件中保存结果。
+    发出echo请求，在后续事件中保存结果。
     """
 
     async def run(self, context: ExecutionContext) -> ExecutionResult:

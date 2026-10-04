@@ -1,17 +1,22 @@
 """持久化完整对话和工具调用轨迹，每个实例同时等待一个Action。"""
 
 from copy import deepcopy
-from decimal import Decimal
 import json
 import re
 from uuid import uuid4
 
 from ..agent import Action, BusinessError, ExecutionContext, ExecutionResult, JSONObject
-from ..protocol import validate_json
+from ..prompt import (
+    MAX_PROMPT_BYTES,
+    PromptBuilder,
+    PromptTooLong,
+    json_size as _json_size,
+    json_text as _json_text,
+)
 
 
 MAX_HISTORY_TURNS = 20
-MAX_HISTORY_BYTES = 384 * 1024
+MAX_HISTORY_BYTES = MAX_PROMPT_BYTES
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_PENDING_BYTES = 128 * 1024
 MAX_TOOL_CALLS = 8
@@ -25,7 +30,7 @@ TOOLS = [{
     "type": "function",
     "function": {
         "name": "agent_status",
-        "description": "查询一个 Agent 的状态；省略 agent_id 时查询当前 Agent。",
+        "description": "查询一个Agent的状态；省略agent_id时查询当前Agent。",
         "parameters": {
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
@@ -52,36 +57,6 @@ def initial_state() -> JSONObject:
         "result": None,
         "error": None,
     }
-
-
-def _json_text(value: object) -> str:
-    # 保留协议中的无损Decimal数字，工具结果不经过有损浮点数转换。
-    validate_json(value)
-
-    def encode(item):
-        if isinstance(item, Decimal):
-            return str(item)
-        if isinstance(item, dict):
-            return "{" + ",".join(
-                json.dumps(key, ensure_ascii=False) + ":" + encode(child)
-                for key, child in item.items()
-            ) + "}"
-        if isinstance(item, list):
-            return "[" + ",".join(encode(child) for child in item) + "]"
-        return json.dumps(item, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-    return encode(value)
-
-
-def _json_size(value: object) -> int:
-    # 和Go的JSON编码一致，计入UTF-8、控制字符以及HTML/行分隔符转义。
-    encoded = _json_text(value)
-    for character, escaped in (
-        ("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"),
-        ("\u2028", "\\u2028"), ("\u2029", "\\u2029"),
-    ):
-        encoded = encoded.replace(character, escaped)
-    return len(encoded.encode("utf-8"))
 
 
 def _tool_calls(value: object) -> list[JSONObject]:
@@ -183,16 +158,6 @@ def _trim_history(messages: list[JSONObject]) -> list[JSONObject]:
     return []
 
 
-def _model_history(history: list[JSONObject], pending: list[JSONObject]) -> list[JSONObject]:
-    turns = _turns(history)
-    while turns:
-        messages = [message for turn in turns for message in turn]
-        if _json_size(messages) + _json_size(pending) <= MAX_HISTORY_BYTES:
-            return messages
-        turns.pop(0)
-    return []
-
-
 def _tool_message(call: JSONObject, result: JSONObject) -> JSONObject:
     return {"role": "tool", "tool_call_id": call["id"], "content": _json_text(result)}
 
@@ -235,6 +200,9 @@ def _arguments(call: JSONObject, agent_id: str) -> JSONObject:
 
 
 class MainAgent:
+    def __init__(self, prompt_builder: PromptBuilder | None = None):
+        self.prompt_builder = prompt_builder
+
     def run(self, context: ExecutionContext) -> ExecutionResult:
         state = context.agent.state or initial_state()
         status = state.get("request_status")
@@ -314,12 +282,16 @@ class MainAgent:
     def _model_action(self, context: ExecutionContext, update: JSONObject) -> ExecutionResult:
         if _json_size(update["pending_messages"]) > MAX_PENDING_BYTES:
             return self._finish(context, update, error="本轮工具调用轨迹超过128KiB")
+        builder = self.prompt_builder or PromptBuilder.from_env()
+        try:
+            messages = builder.build(_turns(update["messages"]), update["pending_messages"])
+        except PromptTooLong as error:
+            return self._finish(context, update, error=str(error))
         action = Action(
             id=str(uuid4()),
             type="model.generate",
             payload={
-                "messages": _model_history(update["messages"], update["pending_messages"])
-                + deepcopy(update["pending_messages"]),
+                "messages": messages,
                 "tools": deepcopy(TOOLS),
             },
         )

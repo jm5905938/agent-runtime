@@ -12,6 +12,11 @@ import (
 // Exercise the actual Go/Python protocol near its 1 MiB frame limit. A tool
 // continuation duplicates the current turn into both state and model input.
 func TestMainToolContinuationFitsWorkerFramesAndPreservesHistoryOnFailure(t *testing.T) {
+	// Exercise the byte limit independently of the lower default character
+	// budget, including a system prefix in the complete message array.
+	t.Setenv("LLM_MAX_PROMPT_CHARS", "393216")
+	systemPrompt := "你是MainAgent。" + strings.Repeat("s", 1024)
+	t.Setenv("LLM_SYSTEM_PROMPT", systemPrompt)
 	p := openPythonRuntime(t, core.NewMemoryRecoveryStore(), core.EchoHandler{}, domain.RecoveryPolicySafeRetry)
 	var history []any
 	for range 3 {
@@ -78,6 +83,10 @@ func TestMainToolContinuationFitsWorkerFramesAndPreservesHistoryOnFailure(t *tes
 	modelInput, err := json.Marshal(continued.Actions[0].Payload["messages"])
 	if err != nil || len(modelInput) > 384*1024 {
 		t.Fatalf("continuation exceeded the model input budget: bytes=%d err=%v", len(modelInput), err)
+	}
+	messages := continued.Actions[0].Payload["messages"].([]any)
+	if first := messages[0].(map[string]any); first["role"] != "system" || first["content"] != systemPrompt {
+		t.Fatal("continuation lost its system prompt prefix")
 	}
 	if !reflect.DeepEqual(continued.StateUpdate["messages"], history) ||
 		continued.StateUpdate["request_execution_id"] != string(input.ExecutionID) ||

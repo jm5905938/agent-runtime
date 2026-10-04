@@ -11,7 +11,7 @@ class LifecycleError(Exception):
 
 class LifecycleManager:
     """
-    Agent 生命周期管理。
+    Agent生命周期管理。
     """
 
     _transitions: ClassVar[dict[AgentStatus, set[AgentStatus]]] = {
@@ -29,7 +29,7 @@ class LifecycleManager:
         target: AgentStatus,
     ) -> None:
         """
-        尝试迁移 Agent 状态。
+        尝试迁移Agent状态。
         """
 
         allowed = self._transitions.get(agent.status, set())

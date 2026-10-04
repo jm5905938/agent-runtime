@@ -22,10 +22,12 @@ const (
 )
 
 type Config struct {
-	BaseURL string
-	APIKey  string
-	Model   string
-	Timeout time.Duration
+	BaseURL        string
+	APIKey         string
+	Model          string
+	Timeout        time.Duration
+	SystemPrompt   string
+	MaxPromptChars int
 }
 
 type Handler struct {
@@ -54,6 +56,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if strings.TrimSpace(config.Model) == "" || !utf8.ValidString(config.Model) {
 		return nil, errors.New("LLM_MODEL不能为空或包含非法字符")
+	}
+	if err := validatePromptConfig(config); err != nil {
+		return nil, err
 	}
 	if config.Timeout < 0 {
 		return nil, errors.New("模型请求超时必须大于0")

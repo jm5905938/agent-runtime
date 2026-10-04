@@ -258,7 +258,7 @@ func (s *Session) LoadDelivery(
 	}, nil
 }
 
-// 选deliveries，按 receive_seq排列
+// 选deliveries，按receive_seq排列
 func (s *Session) ListDeliveries(
 	ctx context.Context,
 	statuses ...domain.DeliveryStatus,

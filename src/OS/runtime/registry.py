@@ -5,7 +5,7 @@ from OS.domain.agent import AgentInstance
 
 class AgentRegistry:
     """
-    Agent 注册表。
+    Agent注册表。
     """
 
     def __init__(self):
@@ -13,7 +13,7 @@ class AgentRegistry:
 
     def register(self, agent: AgentInstance) -> None:
         """
-        注册 Agent。
+        注册Agent。
         """
 
         if agent.id in self._agents:
@@ -23,7 +23,7 @@ class AgentRegistry:
 
     def get(self, agent_id: UUID) -> AgentInstance:
         """
-        根据 ID 获取 Agent。
+        根据ID获取Agent。
         """
 
         try:
@@ -34,7 +34,7 @@ class AgentRegistry:
 
     def remove(self, agent_id: UUID) -> None:
         """
-        删除 Agent。
+        删除Agent。
         """
 
         if agent_id not in self._agents:

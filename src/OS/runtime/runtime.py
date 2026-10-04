@@ -36,7 +36,7 @@ class Runtime:
         runner: AgentRunner,
     ) -> None:
         """
-        注册 Agent 与对应执行器。
+        注册Agent与对应执行器。
         """
 
         self.registry.register(agent)
@@ -72,7 +72,7 @@ class Runtime:
                 if len(set(action_ids)) != len(action_ids) or any(
                     action_id in self.actions for action_id in action_ids
                 ):
-                    raise ValueError("Action 标识重复")
+                    raise ValueError("Action标识重复")
                 for action in actions:
                     action.execution_id = execution.id
                 self.state_manager.apply(agent, result)
@@ -103,7 +103,7 @@ class Runtime:
 
     async def run_until_idle(self) -> None:
         """
-        处理队列中的事件与 Action，直到没有待处理工作。
+        处理队列中的事件与Action，直到没有待处理工作。
         """
 
         async with self._drain_lock:
@@ -116,7 +116,7 @@ class Runtime:
                     agent_id, action = self._pending_actions[0]
                     agent = self.registry.get(agent_id)
                     if agent.status != AgentStatus.ACTIVE:
-                        raise LifecycleError(f"Agent {agent_id} 当前状态不允许执行 Action")
+                        raise LifecycleError(f"Agent{agent_id}当前状态不允许执行Action")
                     event = await self.executor.execute(action)
                     self._pending.append((agent_id, event))
                     self._pending_actions.popleft()

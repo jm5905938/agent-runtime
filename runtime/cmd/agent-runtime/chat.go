@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 type chatResult struct {
@@ -35,7 +36,7 @@ func runMainAgent(ctx context.Context, message string, options pythonrunner.Opti
 	if err != nil {
 		return output, err
 	}
-	session, err := openRuntimeSession(ctx, core.NewMemoryRecoveryStore(), options)
+	session, err := openRuntimeSession(ctx, core.NewMemoryRecoveryStore(), promptRunnerOptions(options, config))
 	if err != nil {
 		return output, err
 	}
@@ -81,4 +82,19 @@ func runMainAgent(ctx context.Context, message string, options pythonrunner.Opti
 		return output, err
 	}
 	return chatResult{AgentID: agent.ID, Status: status, Result: reply, Executions: len(executions), Actions: len(actions)}, nil
+}
+
+func promptRunnerOptions(options pythonrunner.Options, config model.Config) pythonrunner.Options {
+	env := make(map[string]string, len(options.Env)+2)
+	for key, value := range options.Env {
+		env[key] = value
+	}
+	maxPromptChars := config.MaxPromptChars
+	if maxPromptChars == 0 {
+		maxPromptChars = model.DefaultMaxPromptChars
+	}
+	env["LLM_SYSTEM_PROMPT"] = config.SystemPrompt
+	env["LLM_MAX_PROMPT_CHARS"] = strconv.Itoa(maxPromptChars)
+	options.Env = env
+	return options
 }
