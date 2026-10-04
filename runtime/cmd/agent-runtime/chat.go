@@ -43,6 +43,9 @@ func runMainAgent(ctx context.Context, message string, options pythonrunner.Opti
 	if err := session.runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, session.runner); err != nil {
 		return output, err
 	}
+	if err := registerAgentStatus(ctx, session.runtime); err != nil {
+		return output, err
+	}
 	if err := session.runtime.Executor().Register("model.generate", handler); err != nil {
 		return output, err
 	}

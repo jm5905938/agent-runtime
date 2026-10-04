@@ -36,8 +36,10 @@ type Handler struct {
 }
 
 type message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 func NewHandler(config Config) (*Handler, error) {
@@ -77,11 +79,16 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	tools, err := actionTools(action.Payload)
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(struct {
-		Model    string    `json:"model"`
-		Messages []message `json:"messages"`
-		Stream   bool      `json:"stream"`
-	}{Model: handler.model, Messages: messages})
+		Model    string           `json:"model"`
+		Messages []message        `json:"messages"`
+		Stream   bool             `json:"stream"`
+		Tools    []toolDefinition `json:"tools,omitempty"`
+	}{Model: handler.model, Messages: messages, Tools: tools})
 	if err != nil {
 		return nil, errors.New("模型请求编码失败")
 	}
@@ -118,12 +125,29 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content *string `json:"content"`
+				Content   *string    `json:"content"`
+				ToolCalls []toolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, errors.New("模型回复不是有效的chat completions响应")
+	}
+	if len(result.Choices) > 0 && len(result.Choices[0].Message.ToolCalls) > 0 {
+		choice := result.Choices[0].Message
+		if err := validateToolCalls(choice.ToolCalls); err != nil {
+			return nil, err
+		}
+		content := ""
+		if choice.Content != nil {
+			content = *choice.Content
+		}
+		output := map[string]any{"message": content, "tool_calls": toolCallData(choice.ToolCalls)}
+		encoded, err := json.Marshal(output)
+		if err != nil || len(encoded) > maxMessageBytes {
+			return nil, errors.New("模型工具回复超过256KiB")
+		}
+		return output, nil
 	}
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil ||
 		strings.TrimSpace(*result.Choices[0].Message.Content) == "" {
@@ -135,30 +159,4 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 		return nil, errors.New("模型回复文本超过256KiB")
 	}
 	return map[string]any{"message": content}, nil
-}
-
-func actionMessages(value any) ([]message, error) {
-	items, ok := value.([]any)
-	if !ok || len(items) == 0 {
-		return nil, errors.New("模型action需要非空messages列表")
-	}
-	messages := make([]message, len(items))
-	for index, item := range items {
-		fields, ok := item.(map[string]any)
-		if !ok {
-			return nil, errors.New("模型消息必须包含role和content字符串")
-		}
-		role, roleOK := fields["role"].(string)
-		content, contentOK := fields["content"].(string)
-		if !roleOK || !contentOK || !utf8.ValidString(content) {
-			return nil, errors.New("模型消息必须包含role和utf-8文本content")
-		}
-		switch role {
-		case "system", "developer", "user", "assistant":
-		default:
-			return nil, errors.New("模型消息role仅支持system、developer、user和assistant")
-		}
-		messages[index] = message{Role: role, Content: content}
-	}
-	return messages, nil
 }

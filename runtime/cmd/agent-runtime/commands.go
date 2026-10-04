@@ -133,6 +133,9 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	if err := runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, runner); err != nil {
 		return runner, err
 	}
+	if err := registerAgentStatus(ctx, runtime); err != nil {
+		return runner, err
+	}
 	if options.request.Command != "run" {
 		return runner, nil
 	}
