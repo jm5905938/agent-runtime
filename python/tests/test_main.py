@@ -10,8 +10,9 @@ from unittest.mock import patch
 
 from agent_runtime import AgentSnapshot, BusinessError, DefinitionRef, Event, ExecutionContext
 from agent_runtime.agents import MainAgent
-from agent_runtime.agents.main import MAX_HISTORY_BYTES, MAX_HISTORY_TURNS, MAX_MESSAGE_BYTES, TOOLS, initial_state
+from agent_runtime.agents.main import MAX_HISTORY_BYTES, MAX_HISTORY_TURNS, MAX_MESSAGE_BYTES, initial_state
 from agent_runtime.protocol import decode_frame, encode_frame
+from agent_runtime.tools import default_tools
 
 
 def context(state=None, *, event_type="main.request", payload=None, event_id="request-1", execution_id="execution-1"):
@@ -70,7 +71,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(len(output.actions), 1)
         action = output.actions[0]
         self.assertEqual(action.type, "model.generate")
-        self.assertEqual(action.payload, {"messages": [{"role": "user", "content": "你好\n🌍"}], "tools": TOOLS})
+        self.assertEqual(action.payload, {"messages": [{"role": "user", "content": "你好\n🌍"}], "tools": default_tools().definitions()})
         waiting = output.state_update
         self.assertEqual(waiting["request_status"], "waiting")
         self.assertEqual(waiting["request_event_id"], "request-1")
@@ -106,7 +107,7 @@ class MainTests(unittest.TestCase):
         saved = deepcopy(state)
         output = self.agent.run(context(state, payload={"message": "second"}, event_id="request-2", execution_id="execution-3"))
         self.assertEqual(state, saved)
-        self.assertEqual(output.actions[0].payload, {"messages": history + [{"role": "user", "content": "second"}], "tools": TOOLS})
+        self.assertEqual(output.actions[0].payload, {"messages": history + [{"role": "user", "content": "second"}], "tools": default_tools().definitions()})
         self.assertEqual(output.state_update["messages"], history)
         self.assertEqual(output.state_update["pending_message"], "second")
         self.assertEqual(set(output.state_update), set(initial_state()))
@@ -155,7 +156,7 @@ class MainTests(unittest.TestCase):
         for state in (None, {}):
             with self.subTest(state=state):
                 output = self.agent.run(context(state, payload={"message": ""}))
-                self.assertEqual(output.actions[0].payload, {"messages": [{"role": "user", "content": ""}], "tools": TOOLS})
+                self.assertEqual(output.actions[0].payload, {"messages": [{"role": "user", "content": ""}], "tools": default_tools().definitions()})
 
     def test_busy_preserves_request(self):
         state, _ = self.waiting()
@@ -383,7 +384,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual([reply["id"] for reply in replies], ["attempt-1", "attempt-2"])
         main_action = replies[0]["result"]["actions"][0]
         self.assertEqual(main_action["type"], "model.generate")
-        self.assertEqual(main_action["payload"], {"messages": [{"role": "user", "content": "hello"}], "tools": TOOLS})
+        self.assertEqual(main_action["payload"], {"messages": [{"role": "user", "content": "hello"}], "tools": default_tools().definitions()})
         self.assertEqual(replies[1]["result"]["actions"][0]["type"], "echo")
 
 

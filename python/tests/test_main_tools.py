@@ -8,6 +8,8 @@ from agent_runtime.agents import MainAgent
 from agent_runtime.agents.main import initial_state
 from agent_runtime.protocol import encode_frame, result_to_wire
 from agent_runtime.prompt import PromptBuilder
+from agent_runtime.tool import Tool, ToolRegistry
+from agent_runtime.tools.agent_status import AGENT_STATUS
 
 
 def tool_call(call_id="call-1", name="agent_status", arguments="{}"):
@@ -140,6 +142,86 @@ class MainToolTests(unittest.TestCase):
         self.assertEqual([item["tool_call_id"] for item in messages if item["role"] == "tool"], ["first", "second", "third"])
         self.assertEqual([json.loads(item["content"])["index"] for item in messages if item["role"] == "tool"], [0, 1, 2])
         self.assertEqual(state["tool_rounds"], 1)
+
+    def custom_tools(self):
+        def prepare(arguments, context):
+            if set(arguments) != {"text"} or not isinstance(arguments["text"], str):
+                raise ValueError("inspect需要text字符串")
+            return arguments | {"source": context.agent.id}
+
+        return ToolRegistry([AGENT_STATUS, Tool(
+            name="inspect", description="检查测试文本",
+            parameters={
+                "type": "object", "properties": {"text": {"type": "string"}},
+                "required": ["text"], "additionalProperties": False,
+            },
+            prepare=prepare,
+        )])
+
+    def test_registered_tools_share_dispatch_results_and_restored_queue(self):
+        self.agent = MainAgent(PromptBuilder(), self.custom_tools())
+        state, output = self.request()
+        self.assertEqual(
+            [item["function"]["name"] for item in output.actions[0].payload["tools"]],
+            ["agent_status", "inspect"],
+        )
+        calls = [
+            tool_call("one", "inspect", '{"text":"first"}'),
+            tool_call("two"),
+            tool_call("three", "inspect", '{"text":"last"}'),
+        ]
+        state, output = self.call_tools(state, calls)
+        self.assertEqual(output.actions[0].type, "tool.inspect")
+        self.assertEqual(output.actions[0].payload, {"text": "first", "source": "agent-1"})
+        for index, expected in enumerate(("tool.agent_status", "tool.inspect", "model.generate")):
+            state = json.loads(json.dumps(state))
+            self.agent = MainAgent(PromptBuilder(), self.custom_tools())
+            if index == 2:
+                state, output = self.reply(state, status="failed", error="检查失败")
+            else:
+                state, output = self.reply(state, result={"index": index})
+            self.assertEqual(output.actions[0].type, expected)
+        messages = [item for item in output.actions[0].payload["messages"] if item["role"] == "tool"]
+        self.assertEqual([item["tool_call_id"] for item in messages], ["one", "two", "three"])
+        self.assertEqual([json.loads(item["content"]) for item in messages], [
+            {"index": 0}, {"index": 1}, {"error": "检查失败"},
+        ])
+        state, _ = self.reply(state)
+        self.assert_finished(state)
+
+    def test_registered_parameter_error_continues_to_next_tool(self):
+        self.agent = MainAgent(PromptBuilder(), self.custom_tools())
+        state, _ = self.request()
+        state, output = self.call_tools(state, [
+            tool_call("bad", "inspect", '{"text":42}'), tool_call("good"),
+        ])
+        self.assertEqual(output.actions[0].type, "tool.agent_status")
+        self.assertEqual(json.loads(state["pending_messages"][-1]["content"]), {"error": "inspect需要text字符串"})
+        state, output = self.reply(state, result={"status": "active"})
+        self.assertEqual(output.actions[0].type, "model.generate")
+
+    def test_waiting_tool_must_match_queue_and_registered_definition(self):
+        self.agent = MainAgent(PromptBuilder(), self.custom_tools())
+        state, _ = self.request()
+        state, _ = self.call_tools(state, [tool_call("inspect", "inspect", '{"text":"test"}')])
+        mismatched = deepcopy(state)
+        mismatched["waiting_action_type"] = "tool.agent_status"
+        with self.assertRaisesRegex(ValueError, "待处理工具不匹配"):
+            self.reply(mismatched, result={"status": "active"})
+        self.agent = MainAgent(PromptBuilder())
+        with self.assertRaisesRegex(ValueError, "waiting_action_type"):
+            self.reply(state, result={"text": "test"})
+
+    def test_empty_registry_omits_model_tools_and_rejects_unregistered_calls(self):
+        self.agent = MainAgent(PromptBuilder(), ToolRegistry())
+        state, output = self.request()
+        self.assertNotIn("tools", output.actions[0].payload)
+        state, output = self.call_tools(state)
+        self.assertEqual(output.actions[0].type, "model.generate")
+        self.assertNotIn("tools", output.actions[0].payload)
+        self.assertEqual(json.loads(state["pending_messages"][-1]["content"]), {"error": "不支持的工具: agent_status"})
+        state, _ = self.reply(state)
+        self.assert_finished(state)
 
     def test_failed_tool_becomes_error_message_and_model_continues(self):
         state, _ = self.request()
