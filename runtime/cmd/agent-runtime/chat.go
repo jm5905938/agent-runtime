@@ -50,6 +50,17 @@ func runMainAgent(ctx context.Context, message string, options pythonrunner.Opti
 	if err := registerAgentStatus(ctx, session.runtime); err != nil {
 		return output, err
 	}
+	if err := session.runtime.Executor().RegisterWithOptions(
+		getCurrentTimeActionType,
+		getCurrentTimeHandler{},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+			MaxAttempts:    3,
+		},
+	); err != nil {
+		return output, err
+	}
 	if err := session.runtime.Executor().Register("model.generate", handler); err != nil {
 		return output, err
 	}

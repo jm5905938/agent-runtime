@@ -69,7 +69,7 @@ func mainToolsReadRequest(t *testing.T, r *http.Request) mainToolsModelRequest {
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		t.Errorf("读取模型请求: %v", err)
 	}
-	if request.Model != "test-model" || request.Stream || len(request.Tools) != 1 {
+	if request.Model != "test-model" || request.Stream || len(request.Tools) < 1 {
 		t.Errorf("模型请求缺少工具声明: %+v", request)
 		return request
 	}
