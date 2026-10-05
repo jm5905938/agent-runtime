@@ -55,11 +55,17 @@ func runCommandWithInput(ctx context.Context, args []string, stdin io.Reader, st
 	}
 	options.python.Stderr = stderr
 	var diagnostics workerDiagnostics
-	if options.asJSON {
+	if options.asJSON || options.request.Command == "tui" {
 		options.python.Stderr = &diagnostics
 	}
 	reportError := func(err error) int {
 		return writeCommandError(stderr, options.asJSON, err, diagnostics.String())
+	}
+	if options.request.Command == "tui" {
+		if err := runTUI(ctx, options, stdin, stdout, open); err != nil {
+			return reportError(err)
+		}
+		return 0
 	}
 	if options.request.Command == "chat" || options.request.Command == "resume" || options.friendlyStatus {
 		if err := runConversationCommand(ctx, options, stdin, stdout, open); err != nil {
@@ -164,7 +170,7 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	if err := runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, mainAgentRunner{
 		AgentRunner: runner,
 		prepare: func(ctx context.Context, agent core.AgentSnapshot, event domain.Event) error {
-			if (options.request.Command == "run" || options.request.Command == "chat" || options.request.Command == "resume") && deliveryNeedsModel(agent, core.DeliveryQuery{Ready: true, Event: event}) {
+			if (options.request.Command == "run" || options.request.Command == "chat" || options.request.Command == "resume" || options.request.Command == "tui") && deliveryNeedsModel(agent, core.DeliveryQuery{Ready: true, Event: event}) {
 				return ensureModel(ctx)
 			}
 			return nil
@@ -296,7 +302,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	if remaining := flags.Args(); len(remaining) > 0 {
 		options.request.Command = remaining[0]
 		switch options.request.Command {
-		case "init", "submit", "run", "status", "retry", "resolve", "chat", "resume":
+		case "init", "submit", "run", "status", "retry", "resolve", "chat", "resume", "tui":
 		default:
 			return options, &cli.UsageError{Message: "未知命令" + options.request.Command}
 		}
@@ -323,6 +329,9 @@ func parseCommand(args []string) (commandOptions, error) {
 		allowed["message"] = true
 	case "chat":
 		allowed["message"], allowed["env-file"], allowed["agent"] = true, true, true
+	case "tui":
+		allowed["env-file"], allowed["agent"] = true, true
+		allowed["json"] = false
 	case "resume":
 		allowed["agent"], allowed["env-file"], allowed["retry"], allowed["abandon"], allowed["reason"] = true, true, true, true, true
 	case "init":
@@ -341,7 +350,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	persistent := options.request.Command != ""
 	if persistent {
 		allowed["data-dir"] = true
-		if !seen["data-dir"] && (options.request.Command == "chat" || options.request.Command == "status" || options.request.Command == "resume") {
+		if !seen["data-dir"] && (options.request.Command == "chat" || options.request.Command == "status" || options.request.Command == "resume" || options.request.Command == "tui") {
 			options.dataDir = defaultDataDir()
 		}
 		if strings.TrimSpace(options.dataDir) == "" {
@@ -406,7 +415,7 @@ func parseCommand(args []string) (commandOptions, error) {
 		if options.request.Command != "submit" && (options.request.Command != "chat" || !options.hasMessage) {
 			options.request.Message = ""
 		}
-		if options.request.Command == "chat" || options.request.Command == "resume" {
+		if options.request.Command == "chat" || options.request.Command == "resume" || options.request.Command == "tui" {
 			if !utf8.ValidString(agentID) || seen["agent"] && strings.TrimSpace(agentID) == "" {
 				return options, &cli.UsageError{Message: "agent必须是非空白的有效UTF-8文本"}
 			}
@@ -488,12 +497,14 @@ func writeCommandError(stderr io.Writer, asJSON bool, err error, diagnostics ...
 }
 
 const commandHelp = `日常用法:
+  agent-runtime tui                          进入终端界面，显示历史、工具状态和输入队列
   agent-runtime chat                         进入持久对话，首次自动创建main agent
   agent-runtime status                       查看当前main agent状态
   agent-runtime resume                       选择重试或放弃卡住的模型调用并继续执行
 
   chat     [--message <文本>] [--agent <id>] [--env-file <文件>]
                                               不传message时交互对话；传入时处理一条输入
+  tui      [--agent <id>] [--env-file <文件>]   Enter发送，Alt+Enter换行，Esc停止，Ctrl+C退出
   status   [--agent <id>]                     指定agent时显示完整记录
   resume   [--agent <id>] [--retry|--abandon] [--reason <原因>]
            [--env-file <文件>]               不指定决定时交互选择，不需要action id
@@ -510,14 +521,14 @@ const commandHelp = `日常用法:
                                               保存人工处理决定，随后使用run继续处理
 
 公共参数可放在命令前后:
-  --data-dir <目录>       chat、status和resume默认使用当前项目的.agent-runtime目录
+  --data-dir <目录>       tui、chat、status和resume默认使用当前项目的.agent-runtime目录
                          其它持久命令必填；数据保存到store.db
   --json                 成功结果写stdout，结构化错误写stderr
                          chat需同时传入--message，resume需指定--retry或--abandon
   --python <路径>        python可执行文件，默认python3，需要3.12+
   --python-source <目录> 包含agent_runtime的源码目录
   --timeout <时长>       每次python调用期限，默认30s
-  --env-file <文件>      chat、resume或run的模型配置文件，默认项目根目录的.env
+  --env-file <文件>      tui、chat、resume或run的模型配置文件，默认项目根目录的.env
   --help                 显示帮助
 
 chat退出后再次启动会恢复同一个main agent和历史；输入/exit或/quit退出
