@@ -6,8 +6,9 @@ from unittest.mock import patch
 
 from agent_runtime import AgentSnapshot, BusinessError, DefinitionRef, Event, ExecutionContext
 from agent_runtime.agents import MainAgent
-from agent_runtime.agents.main import TOOLS, initial_state
+from agent_runtime.agents.main import initial_state
 from agent_runtime.prompt import PromptBuilder
+from agent_runtime.tools import default_tools
 
 
 def tool_call():
@@ -108,7 +109,7 @@ class MainResolutionTests(unittest.TestCase):
         self.assertEqual([item["role"] for item in retry.payload["messages"]], ["system", "user", "assistant", "tool"])
         self.assertEqual(retry.payload["messages"][2]["tool_calls"], [tool_call()])
         self.assertEqual(json.loads(retry.payload["messages"][3]["content"]), {"agent_id": "agent-1", "status": "active"})
-        self.assertEqual(retry.payload["tools"], TOOLS)
+        self.assertEqual(retry.payload["tools"], default_tools().definitions())
         self.assertEqual(state, saved)
         # 旧调用的迟到结果不得接管新的等待关系。
         with self.assertRaises(BusinessError):

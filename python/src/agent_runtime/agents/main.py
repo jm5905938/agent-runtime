@@ -1,8 +1,6 @@
 """持久化完整对话和工具调用轨迹，每个实例同时等待一个Action。"""
 
 from copy import deepcopy
-import json
-import re
 from uuid import uuid4
 
 from ..agent import Action, BusinessError, ExecutionContext, ExecutionResult, JSONObject
@@ -13,31 +11,15 @@ from ..prompt import (
     json_size as _json_size,
     json_text as _json_text,
 )
+from ..tool import MAX_TOOL_RESULT_BYTES, ToolRegistry, validate_tool_calls as _tool_calls
+from ..tools import default_tools
 
 
 MAX_HISTORY_TURNS = 20
 MAX_HISTORY_BYTES = MAX_PROMPT_BYTES
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_PENDING_BYTES = 128 * 1024
-MAX_TOOL_CALLS = 8
-MAX_TOOL_CALL_BYTES = 32 * 1024
-MAX_TOOL_CALL_ID_BYTES = 128
-MAX_TOOL_NAME_BYTES = 64
 MAX_TOOL_ROUNDS = 4
-MAX_TOOL_RESULT_BYTES = 8 * 1024
-
-TOOLS = [{
-    "type": "function",
-    "function": {
-        "name": "agent_status",
-        "description": "查询一个Agent的状态；省略agent_id时查询当前Agent。",
-        "parameters": {
-            "type": "object",
-            "properties": {"agent_id": {"type": "string"}},
-            "additionalProperties": False,
-        },
-    },
-}]
 
 
 def initial_state() -> JSONObject:
@@ -57,38 +39,6 @@ def initial_state() -> JSONObject:
         "result": None,
         "error": None,
     }
-
-
-def _tool_calls(value: object) -> list[JSONObject]:
-    if not isinstance(value, list) or not 1 <= len(value) <= MAX_TOOL_CALLS:
-        raise ValueError("工具调用数量需要在1到8之间")
-    if _json_size(value) > MAX_TOOL_CALL_BYTES:
-        raise ValueError("工具调用超过32KiB")
-    seen = set()
-    for call in value:
-        if (
-            not isinstance(call, dict)
-            or set(call) != {"id", "type", "function"}
-            or not isinstance(call["id"], str)
-            or not call["id"].strip()
-            or len(call["id"].encode("utf-8")) > MAX_TOOL_CALL_ID_BYTES
-            or call["id"] in seen
-            or call["type"] != "function"
-        ):
-            raise ValueError("工具调用格式无效")
-        function = call["function"]
-        if (
-            not isinstance(function, dict)
-            or set(function) != {"name", "arguments"}
-            or not isinstance(function["name"], str)
-            or not function["name"]
-            or len(function["name"].encode("utf-8")) > MAX_TOOL_NAME_BYTES
-            or re.fullmatch(r"[A-Za-z0-9_-]+", function["name"]) is None
-            or not isinstance(function["arguments"], str)
-        ):
-            raise ValueError("工具调用function格式无效")
-        seen.add(call["id"])
-    return deepcopy(value)
 
 
 def _turns(messages: object) -> list[list[JSONObject]]:
@@ -162,46 +112,12 @@ def _tool_message(call: JSONObject, result: JSONObject) -> JSONObject:
     return {"role": "tool", "tool_call_id": call["id"], "content": _json_text(result)}
 
 
-def _arguments(call: JSONObject, agent_id: str) -> JSONObject:
-    if call["function"]["name"] != "agent_status":
-        raise ValueError("不支持的工具: " + call["function"]["name"])
-
-    def unique_object(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("工具参数包含重复字段")
-            result[key] = value
-        return result
-
-    def invalid_constant(value):
-        raise ValueError("工具参数包含非法数字")
-
-    try:
-        arguments = json.loads(
-            call["function"]["arguments"],
-            object_pairs_hook=unique_object,
-            parse_constant=invalid_constant,
-        )
-    except (ValueError, RecursionError) as error:
-        raise ValueError("工具参数需要JSON对象") from error
-    if not isinstance(arguments, dict) or arguments.keys() - {"agent_id"}:
-        raise ValueError("agent_status只接受可选的agent_id参数")
-    target = arguments.get("agent_id", agent_id)
-    if not isinstance(target, str) or not target.strip():
-        raise ValueError("agent_id需要非空字符串")
-    try:
-        target_bytes = target.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise ValueError("agent_id需要有效UTF-8") from error
-    if len(target_bytes) > 1024:
-        raise ValueError("agent_id超过1024字节")
-    return {"agent_id": target}
-
-
 class MainAgent:
-    def __init__(self, prompt_builder: PromptBuilder | None = None):
+    def __init__(
+        self, prompt_builder: PromptBuilder | None = None, tools: ToolRegistry | None = None
+    ):
         self.prompt_builder = prompt_builder
+        self.tools = default_tools() if tools is None else tools
 
     def run(self, context: ExecutionContext) -> ExecutionResult:
         state = context.agent.state or initial_state()
@@ -217,7 +133,7 @@ class MainAgent:
             if not legacy and not isinstance(state.get("pending_message"), str):
                 raise ValueError("main状态无效: pending_message")
             if not legacy and "waiting_action_type" in state:
-                if state["waiting_action_type"] not in ("model.generate", "tool.agent_status"):
+                if state["waiting_action_type"] != "model.generate" and not self.tools.supports(state["waiting_action_type"]):
                     raise ValueError("main状态无效: waiting_action_type")
                 if not isinstance(state.get("waiting_execution_id"), str) or not state["waiting_execution_id"]:
                     raise ValueError("main状态无效: waiting_execution_id")
@@ -252,8 +168,10 @@ class MainAgent:
                 _tool_calls(queue)
             except ValueError as error:
                 raise ValueError(f"main状态无效: pending_tool_calls {error}") from error
-        if (state["waiting_action_type"] == "tool.agent_status") != bool(queue):
+        if self.tools.supports(state["waiting_action_type"]) != bool(queue):
             raise ValueError("main状态无效: pending_tool_calls")
+        if queue and self.tools.action_type(queue[0]["function"]["name"]) != state["waiting_action_type"]:
+            raise ValueError("main状态无效: waiting_action_type与待处理工具不匹配")
         # 通过临时补齐剩余工具回复和最终回复，复用完整历史验证。
         completed = deepcopy(pending)
         completed.extend(_tool_message(call, {}) for call in queue)
@@ -289,14 +207,11 @@ class MainAgent:
             messages = builder.build(_turns(update["messages"]), update["pending_messages"])
         except PromptTooLong as error:
             return self._finish(context, update, error=str(error))
-        action = Action(
-            id=str(uuid4()),
-            type="model.generate",
-            payload={
-                "messages": messages,
-                "tools": deepcopy(TOOLS),
-            },
-        )
+        payload = {"messages": messages}
+        tools = self.tools.definitions()
+        if tools:
+            payload["tools"] = tools
+        action = Action(id=str(uuid4()), type="model.generate", payload=payload)
         update.update(
             request_status="waiting",
             waiting_action_id=action.id,
@@ -399,7 +314,7 @@ class MainAgent:
             update["tool_rounds"] = 0
         elif "pending_messages" not in state:
             update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
-        if action_type == "tool.agent_status":
+        if self.tools.supports(action_type):
             call = update["pending_tool_calls"].pop(0)
             if status == "failed":
                 tool_result = {"error": payload["error"]}
@@ -448,12 +363,11 @@ class MainAgent:
                 return self._finish(context, update, error="本轮工具调用轨迹超过128KiB")
             call = update["pending_tool_calls"][0]
             try:
-                arguments = _arguments(call, context.agent.id)
+                action = self.tools.create_action(call, context)
             except ValueError as error:
                 update["pending_tool_calls"].pop(0)
                 update["pending_messages"].append(_tool_message(call, {"error": str(error)}))
                 continue
-            action = Action(id=str(uuid4()), type="tool.agent_status", payload=arguments)
             update.update(
                 request_status="waiting",
                 waiting_action_id=action.id,
