@@ -1,1 +1,4 @@
 .agent-runtime/
+.env
+.env.*
+!.env.example
