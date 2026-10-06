@@ -102,7 +102,7 @@ class MainToolTests(unittest.TestCase):
         tools = output.actions[0].payload["tools"]
         self.assertEqual(
             {item["function"]["name"] for item in tools},
-            {"agent_status", "get_current_time", "get_current_date", "read_file"},
+            {"agent_status", "get_current_time", "get_current_date", "read_file", "write_file"},
         )
         for item in tools:
             self.assertEqual(item["type"], "function")

@@ -214,6 +214,17 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	); err != nil {
 		return runner, err
 	}
+	if err := runtime.Executor().RegisterWithOptions(
+		writeFileActionType,
+		writeFileHandler{rootDir: options.python.SourceDir},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicyManual,
+			MaxAttempts:    1,
+		},
+	); err != nil {
+		return runner, err
+	}
 	if options.request.Command == "run" {
 		needed, err := modelWorkPending(ctx, runtime)
 		if err != nil {

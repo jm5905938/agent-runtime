@@ -83,6 +83,17 @@ func runMainAgent(ctx context.Context, message string, options pythonrunner.Opti
 	); err != nil {
 		return output, err
 	}
+	if err := session.runtime.Executor().RegisterWithOptions(
+		writeFileActionType,
+		writeFileHandler{rootDir: options.SourceDir},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicyManual,
+			MaxAttempts:    1,
+		},
+	); err != nil {
+		return output, err
+	}
 	if err := session.runtime.Executor().Register("model.generate", handler); err != nil {
 		return output, err
 	}
