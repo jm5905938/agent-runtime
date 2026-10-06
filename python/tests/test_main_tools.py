@@ -100,7 +100,10 @@ class MainToolTests(unittest.TestCase):
         self.assertEqual(state["waiting_execution_id"], state["request_execution_id"])
         self.assertEqual(state["waiting_action_type"], "model.generate")
         tools = output.actions[0].payload["tools"]
-        self.assertEqual(len(tools), 1)
+        self.assertEqual(
+            [tool["function"]["name"] for tool in tools],
+            ["agent_status", "spawn_subagent", "wait_subagent", "cancel_subagent"],
+        )
         self.assertEqual(tools[0]["type"], "function")
         self.assertEqual(tools[0]["function"]["name"], "agent_status")
         self.assertEqual(tools[0]["function"]["parameters"]["type"], "object")

@@ -71,11 +71,11 @@ func (s *tuiSession) run(ctx context.Context, resume bool, decision core.Resolut
 	}
 	defer s.work.Done()
 	if resume {
-		query, err := s.runtime.QueryAgentContext(ctx, s.agentID)
+		unknown, err := treeUnknownConversationAction(ctx, s.runtime, s.agentID)
 		if err != nil {
 			return err
 		}
-		if unknown := waitingUnknownConversationAction(query); unknown != nil {
+		if unknown != nil {
 			if decision == "" {
 				return errors.New("模型调用结果未知，请选择重试或放弃")
 			}
@@ -88,18 +88,42 @@ func (s *tuiSession) run(ctx context.Context, resume bool, decision core.Resolut
 				return err
 			}
 		}
-		if err := retryConversationDelivery(ctx, s.runtime, s.agentID, decision, s.prepare); err != nil {
+		if err := retryConversationTree(ctx, s.runtime, s.agentID, decision, s.prepare); err != nil {
 			return err
 		}
 	}
-	if needed, err := modelWorkPendingForAgent(ctx, s.runtime, s.agentID); err != nil {
+	if needed, err := modelWorkPendingForTree(ctx, s.runtime, s.agentID); err != nil {
 		return err
 	} else if needed {
 		if err := s.prepare(ctx); err != nil {
 			return err
 		}
 	}
-	return s.runtime.RunAgentUntilIdleContext(ctx, s.agentID)
+	return s.runtime.RunAgentTreeUntilIdleContext(ctx, s.agentID)
+}
+
+func (s *tuiSession) treeState() (bool, *core.ActionQuery, error) {
+	if err := s.begin(); err != nil {
+		return false, nil, err
+	}
+	defer s.work.Done()
+	ids, err := s.runtime.AgentTreeContext(s.ctx, s.agentID)
+	if err != nil {
+		return false, nil, err
+	}
+	ready := false
+	var unknown *core.ActionQuery
+	for _, id := range ids {
+		query, err := s.runtime.QueryAgentContext(s.ctx, id)
+		if err != nil {
+			return false, nil, err
+		}
+		ready = ready || tuiReady(query)
+		if unknown == nil {
+			unknown = waitingUnknownConversationAction(query)
+		}
+	}
+	return ready, unknown, nil
 }
 
 func runTUI(ctx context.Context, options commandOptions, stdin io.Reader, stdout io.Writer, open backendOpener) error {
@@ -116,6 +140,10 @@ func runTUI(ctx context.Context, options commandOptions, stdin io.Reader, stdout
 			return err
 		}
 		view := newTUIModel(session, query, options.dataDir)
+		view.treeReady, view.unknown, err = session.treeState()
+		if err != nil {
+			return err
+		}
 		if config, err := model.LoadConfig(options.envFile); err == nil {
 			view.modelName = config.Model
 		}

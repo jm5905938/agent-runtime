@@ -28,6 +28,7 @@ type commandOptions struct {
 	envFile        string
 	hasMessage     bool
 	friendlyStatus bool
+	taskID         domain.ID
 }
 
 func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -63,6 +64,12 @@ func runCommandWithInput(ctx context.Context, args []string, stdin io.Reader, st
 	}
 	if options.request.Command == "tui" {
 		if err := runTUI(ctx, options, stdin, stdout, open); err != nil {
+			return reportError(err)
+		}
+		return 0
+	}
+	if options.request.Command == "cancel" {
+		if err := runCancelCommand(ctx, options, stdout, open); err != nil {
 			return reportError(err)
 		}
 		return 0
@@ -167,7 +174,7 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	if err := registerEcho(runtime, runner); err != nil {
 		return runner, err
 	}
-	if err := runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, mainAgentRunner{
+	modelRunner := mainAgentRunner{
 		AgentRunner: runner,
 		prepare: func(ctx context.Context, agent core.AgentSnapshot, event domain.Event) error {
 			if (options.request.Command == "run" || options.request.Command == "chat" || options.request.Command == "resume" || options.request.Command == "tui") && deliveryNeedsModel(agent, core.DeliveryQuery{Ready: true, Event: event}) {
@@ -175,10 +182,16 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 			}
 			return nil
 		},
-	}); err != nil {
-		return runner, err
+	}
+	for _, id := range []string{"main", "subagent"} {
+		if err := runtime.RegisterDefinition(domain.DefinitionRef{ID: id, Version: "1"}, modelRunner); err != nil {
+			return runner, err
+		}
 	}
 	if err := registerAgentStatus(ctx, runtime); err != nil {
+		return runner, err
+	}
+	if err := runtime.RegisterSubagentTools(); err != nil {
 		return runner, err
 	}
 	if options.request.Command == "run" {
@@ -270,7 +283,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	flags := flag.NewFlagSet("agent-runtime", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
-	var agentID, eventID, actionID string
+	var agentID, eventID, actionID, taskID string
 	var retryAction, abandonAction bool
 	flags.StringVar(&options.dataDir, "data-dir", "", "数据目录")
 	flags.BoolVar(&options.asJSON, "json", false, "以json格式输出")
@@ -284,6 +297,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	flags.StringVar(&agentID, "agent", "", "agent id")
 	flags.StringVar(&eventID, "event-id", "", "event id")
 	flags.StringVar(&actionID, "action", "", "结果未知的model.generate action id")
+	flags.StringVar(&taskID, "task", "", "subagent任务id")
 	flags.BoolVar(&retryAction, "retry", false, "人工确认重试结果未知的模型调用")
 	flags.BoolVar(&abandonAction, "abandon", false, "放弃结果未知的模型调用所在轮次")
 	flags.StringVar(&options.request.Reason, "reason", "", "人工处理原因")
@@ -302,7 +316,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	if remaining := flags.Args(); len(remaining) > 0 {
 		options.request.Command = remaining[0]
 		switch options.request.Command {
-		case "init", "submit", "run", "status", "retry", "resolve", "chat", "resume", "tui":
+		case "init", "submit", "run", "status", "retry", "resolve", "chat", "resume", "tui", "cancel":
 		default:
 			return options, &cli.UsageError{Message: "未知命令" + options.request.Command}
 		}
@@ -334,6 +348,8 @@ func parseCommand(args []string) (commandOptions, error) {
 		allowed["json"] = false
 	case "resume":
 		allowed["agent"], allowed["env-file"], allowed["retry"], allowed["abandon"], allowed["reason"] = true, true, true, true, true
+	case "cancel":
+		allowed["agent"], allowed["task"] = true, true
 	case "init":
 		allowed["name"], allowed["definition"] = true, true
 	case "run":
@@ -350,7 +366,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	persistent := options.request.Command != ""
 	if persistent {
 		allowed["data-dir"] = true
-		if !seen["data-dir"] && (options.request.Command == "chat" || options.request.Command == "status" || options.request.Command == "resume" || options.request.Command == "tui") {
+		if !seen["data-dir"] && (options.request.Command == "chat" || options.request.Command == "status" || options.request.Command == "resume" || options.request.Command == "tui" || options.request.Command == "cancel") {
 			options.dataDir = defaultDataDir()
 		}
 		if strings.TrimSpace(options.dataDir) == "" {
@@ -377,6 +393,10 @@ func parseCommand(args []string) (commandOptions, error) {
 	}
 	options.request.AgentID, options.request.EventID = domain.ID(agentID), domain.ID(eventID)
 	options.request.ActionID = domain.ID(actionID)
+	options.taskID = domain.ID(taskID)
+	if options.request.Command == "cancel" && (!seen["task"] || !utf8.ValidString(taskID) || strings.TrimSpace(taskID) == "" || len(taskID) > 1024) {
+		return options, &cli.UsageError{Message: "cancel需要有效的--task任务id，且不超过1024字节"}
+	}
 	if options.request.Command == "resolve" || options.request.Command == "resume" {
 		if options.request.Command == "resume" && !seen["retry"] && !seen["abandon"] {
 			if seen["reason"] {
@@ -415,7 +435,7 @@ func parseCommand(args []string) (commandOptions, error) {
 		if options.request.Command != "submit" && (options.request.Command != "chat" || !options.hasMessage) {
 			options.request.Message = ""
 		}
-		if options.request.Command == "chat" || options.request.Command == "resume" || options.request.Command == "tui" {
+		if options.request.Command == "chat" || options.request.Command == "resume" || options.request.Command == "tui" || options.request.Command == "cancel" {
 			if !utf8.ValidString(agentID) || seen["agent"] && strings.TrimSpace(agentID) == "" {
 				return options, &cli.UsageError{Message: "agent必须是非空白的有效UTF-8文本"}
 			}
@@ -444,7 +464,7 @@ func requestedJSON(args []string) bool {
 			if hasValue {
 				asJSON, _ = strconv.ParseBool(value)
 			}
-		case "message", "agent", "event-id", "action", "reason", "name", "definition", "data-dir", "python", "python-source", "timeout", "env-file":
+		case "message", "agent", "event-id", "action", "task", "reason", "name", "definition", "data-dir", "python", "python-source", "timeout", "env-file":
 			if !hasValue {
 				i++
 			}
@@ -507,6 +527,7 @@ const commandHelp = `日常用法:
   status   [--agent <id>]                     指定agent时显示完整记录
   resume   [--agent <id>] [--retry|--abandon] [--reason <原因>]
            [--env-file <文件>]               不指定决定时交互选择，不需要action id
+  cancel   --task <id> [--agent <id>]         请求取消当前main的subagent任务
 
 脚本和调试命令，需要显式--data-dir <目录>:
   init     [--definition echo|main] [--name <名称>]
@@ -520,7 +541,7 @@ const commandHelp = `日常用法:
                                               保存人工处理决定，随后使用run继续处理
 
 公共参数可放在命令前后:
-  --data-dir <目录>       tui、chat、status和resume默认使用当前项目的.agent-runtime目录
+  --data-dir <目录>       tui、chat、status、resume和cancel默认使用当前项目的.agent-runtime目录
                          其它持久命令必填；数据保存到store.db
   --json                 成功结果写stdout，结构化错误写stderr
                          chat需同时传入--message，resume需指定--retry或--abandon

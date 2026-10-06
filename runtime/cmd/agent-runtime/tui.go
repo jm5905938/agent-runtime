@@ -20,9 +20,11 @@ import (
 
 type tuiTickMsg struct{}
 type tuiQueryMsg struct {
-	query core.AgentQuery
-	err   error
-	epoch uint64
+	query   core.AgentQuery
+	err     error
+	epoch   uint64
+	ready   bool
+	unknown *core.ActionQuery
 }
 type tuiSubmitMsg struct{ err error }
 type tuiRunMsg struct{ err error }
@@ -50,6 +52,8 @@ type tuiModel struct {
 	cancel    context.CancelFunc
 	started   time.Time
 	notice    string
+	treeReady bool
+	unknown   *core.ActionQuery
 }
 
 var tuiAccent = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
@@ -89,7 +93,12 @@ func (m *tuiModel) snapshot() tea.Cmd {
 	epoch := m.epoch
 	return func() tea.Msg {
 		query, err := m.session.query()
-		return tuiQueryMsg{query: query, err: err, epoch: epoch}
+		var ready bool
+		var unknown *core.ActionQuery
+		if err == nil {
+			ready, unknown, err = m.session.treeState()
+		}
+		return tuiQueryMsg{query: query, err: err, epoch: epoch, ready: ready, unknown: unknown}
 	}
 }
 
@@ -97,7 +106,7 @@ func (m *tuiModel) start(resume bool, decision core.ResolutionDecision) tea.Cmd 
 	if m.running || m.paused || m.posting || m.quitting {
 		return nil
 	}
-	if !resume && (!tuiReady(m.query) || waitingUnknownConversationAction(m.query) != nil) {
+	if !resume && !(tuiReady(m.query) || m.treeReady) {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(m.session.ctx)
@@ -137,6 +146,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.query = msg.query
+		m.treeReady, m.unknown = msg.ready, msg.unknown
 		m.refreshHistory()
 		return m, m.start(false, "")
 	case tuiSubmitMsg:
@@ -226,7 +236,11 @@ func (m *tuiModel) resume(decision core.ResolutionDecision) tea.Cmd {
 		m.notice = "请等待当前操作结束"
 		return nil
 	}
-	if waitingUnknownConversationAction(m.query) != nil && decision == "" {
+	if decision == core.ResolutionRetry && cancelledUnknownAction(m.query, m.waitingUnknown()) {
+		m.notice = "任务已取消，只能放弃未确认的结果"
+		return nil
+	}
+	if m.waitingUnknown() != nil && decision == "" {
 		m.deferred = false
 		return nil
 	}
@@ -319,7 +333,7 @@ func (m *tuiModel) View() string {
 		if m.query.Agent.State["waiting_action_type"] == "model.generate" {
 			status += " · 等待模型回复"
 		}
-	} else if waitingUnknownConversationAction(m.query) != nil {
+	} else if m.waitingUnknown() != nil {
 		status = "模型调用结果未知 · 等待你的决定"
 	} else if m.paused {
 		status = "已暂停 · /resume 继续"
@@ -335,13 +349,23 @@ func (m *tuiModel) View() string {
 		status += fmt.Sprintf(" · 待保存 %d", len(m.outbox))
 	}
 	notice := tuiText(m.notice)
-	if waitingUnknownConversationAction(m.query) != nil && !m.deferred && !m.running {
+	if m.waitingUnknown() != nil && !m.deferred && !m.running {
 		notice = "Alt+R 重试（可能重复计费） · Alt+A 放弃本轮 · Esc 稍后"
+		if cancelledUnknownAction(m.query, m.waitingUnknown()) {
+			notice = "任务已取消 · Alt+A 放弃未确认的结果 · Esc 稍后"
+		}
 	}
 	rows := []string{ansi.Truncate(strings.ReplaceAll(header, "\n", " "), w, "…"), line, m.history.View(), "", ansi.Truncate(status, w, "…"),
 		tuiWarning.Render(ansi.Truncate(notice, w, "…")), line, m.input.View(), line,
 		tuiMuted.Render(ansi.Truncate("Enter 发送 · Alt+Enter 换行 · Esc 停止 · Ctrl+C 退出 · PgUp/PgDn 历史 · Ctrl+T 工具详情", w, "…"))}
 	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(rows, "\n"))
+}
+
+func (m *tuiModel) waitingUnknown() *core.ActionQuery {
+	if m.unknown != nil {
+		return m.unknown
+	}
+	return waitingUnknownConversationAction(m.query)
 }
 
 func tuiReady(query core.AgentQuery) bool {

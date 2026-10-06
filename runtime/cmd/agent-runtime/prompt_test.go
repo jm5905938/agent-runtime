@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strconv"
 	"testing"
@@ -334,9 +333,7 @@ func TestPromptSQLiteCommandsAcrossProcesses(t *testing.T) {
 		mainToolsAssertJSON(t, requests[0].Messages, want)
 		status, _ := p.call(t, directory, 0, "status", "--agent", agentID)
 		mainToolsAssertFinished(t, status.Query, "恢复完成", 1)
-		if !reflect.DeepEqual(status.Query.Actions[0].Action.Request, saved.Request) {
-			t.Fatal("配置变化改写了已保存Action的身份或prompt快照")
-		}
+		mainToolsAssertJSON(t, status.Query.Actions[0].Action.Request, saved.Request)
 		mainSQLiteAssertMessages(t, status.Query.Agent.State["messages"], []mainSQLiteMessage{
 			{Role: "user", Content: "旧输入"}, {Role: "assistant", Content: "恢复完成"},
 		})

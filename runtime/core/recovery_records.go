@@ -14,6 +14,7 @@ type RecoveryRecords struct {
 	ClaimVersions  map[domain.ID]uint64
 	Actions        []domain.ActionRecord
 	ActionAttempts []domain.ActionAttempt
+	Tasks          []domain.SubagentTask
 }
 
 func ValidateRecoveryRecords(records RecoveryRecords) error {
@@ -56,6 +57,12 @@ func ValidateRecoveryRecords(records RecoveryRecords) error {
 	}
 	for _, attempt := range records.ActionAttempts {
 		store.actionAttempts[attempt.ActionID] = append(store.actionAttempts[attempt.ActionID], attempt)
+	}
+	for _, task := range records.Tasks {
+		if _, exists := store.tasks[task.ID]; exists {
+			return recoveryConflict("重复subagent任务", task.ID)
+		}
+		store.tasks[task.ID] = cloneSubagentTask(task)
 	}
 	return validateRecoveryRecords(store)
 }

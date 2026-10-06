@@ -57,7 +57,7 @@ func waitingUnknownConversationAction(query core.AgentQuery) *core.ActionQuery {
 	for i := range query.Actions {
 		action := &query.Actions[i]
 		if query.Agent.State["waiting_action_id"] == string(action.Action.Request.ID) && action.Action.Status == domain.ActionStatusUnknown &&
-			action.Action.Request.Type == "model.generate" && action.Action.RecoveryPolicy == domain.RecoveryPolicyManual && action.Resolution == nil {
+			(action.Action.Request.Type == "model.generate" && action.Action.RecoveryPolicy == domain.RecoveryPolicyManual || cancelledUnknownAction(query, action)) && action.Resolution == nil {
 			return action
 		}
 	}
@@ -76,11 +76,11 @@ func conversationSnapshot(ctx context.Context, options commandOptions, open back
 func drainConversation(ctx context.Context, options commandOptions, open backendOpener) (query core.AgentQuery, err error) {
 	err = withConversation(ctx, options, open, false, func(runtime *core.Runtime, agent core.AgentSnapshot, prepare func(context.Context) error) error {
 		if options.request.Command == "resume" {
-			if err := retryConversationDelivery(ctx, runtime, agent.ID, options.request.Decision, prepare); err != nil {
+			if err := retryConversationTree(ctx, runtime, agent.ID, options.request.Decision, prepare); err != nil {
 				return err
 			}
 		}
-		if err := runtime.RunAgentUntilIdleContext(ctx, agent.ID); err != nil {
+		if err := runtime.RunAgentTreeUntilIdleContext(ctx, agent.ID); err != nil {
 			return err
 		}
 		query, err = runtime.QueryAgentContext(ctx, agent.ID)
@@ -94,6 +94,9 @@ func retryConversationDelivery(ctx context.Context, runtime *core.Runtime, agent
 	query, err := runtime.QueryAgentContext(ctx, agentID)
 	if err != nil {
 		return err
+	}
+	if query.Agent.Status != domain.AgentStatusActive {
+		return nil
 	}
 	index := -1
 	for i, delivery := range query.Deliveries {
@@ -114,7 +117,7 @@ func retryConversationDelivery(ctx context.Context, runtime *core.Runtime, agent
 		// 后续输入已取代的历史失败轮不应因resume而再次执行。
 		for i := len(query.Deliveries) - 1; i >= 0; i-- {
 			delivery := query.Deliveries[i]
-			if delivery.Event.Type != "main.request" {
+			if !modelRequestEvent(query.Agent, delivery.Event) {
 				continue
 			}
 			if delivery.Delivery.Status == domain.DeliveryStatusFailed {
@@ -143,12 +146,12 @@ func sendConversationMessage(ctx context.Context, options commandOptions, open b
 	}
 	request := domain.NewEvent("main.request", map[string]any{"message": message})
 	err = withConversation(ctx, options, open, true, func(runtime *core.Runtime, agent core.AgentSnapshot, prepare func(context.Context) error) error {
-		before, err := runtime.QueryAgentContext(ctx, agent.ID)
+		unknown, err := treeUnknownConversationAction(ctx, runtime, agent.ID)
 		if err != nil {
 			return err
 		}
 		// 等待人工处理时允许继续保存输入，模型配置在真正执行前准备。
-		if waitingUnknownConversationAction(before) == nil {
+		if unknown == nil {
 			if err := prepare(ctx); err != nil {
 				return err
 			}
@@ -156,7 +159,7 @@ func sendConversationMessage(ctx context.Context, options commandOptions, open b
 		if _, err := runtime.SubmitContext(ctx, agent.ID, request); err != nil {
 			return err
 		}
-		if err := runtime.RunAgentUntilIdleContext(ctx, agent.ID); err != nil {
+		if err := runtime.RunAgentTreeUntilIdleContext(ctx, agent.ID); err != nil {
 			return err
 		}
 		query, err := runtime.QueryAgentContext(ctx, agent.ID)
@@ -196,13 +199,28 @@ func sendConversationMessage(ctx context.Context, options commandOptions, open b
 
 func resolveConversation(ctx context.Context, options commandOptions, open backendOpener, actionID domain.ID, decision core.ResolutionDecision, reason string) (query core.AgentQuery, receipt core.ActionResolutionReceipt, err error) {
 	err = withConversation(ctx, options, open, false, func(runtime *core.Runtime, agent core.AgentSnapshot, prepare func(context.Context) error) error {
-		before, err := runtime.QueryAgentContext(ctx, agent.ID)
+		action, err := runtime.ActionContext(ctx, actionID)
+		if err != nil {
+			return err
+		}
+		ids, err := runtime.AgentTreeContext(ctx, agent.ID)
+		if err != nil {
+			return err
+		}
+		allowed := false
+		for _, id := range ids {
+			allowed = allowed || id == action.Action.AgentID
+		}
+		if !allowed {
+			return fmt.Errorf("action不属于当前main及其subagent: %w", core.ErrStoreConflict)
+		}
+		before, err := runtime.QueryAgentContext(ctx, action.Action.AgentID)
 		if err != nil {
 			return err
 		}
 		needed := decision == core.ResolutionRetry
 		for _, delivery := range before.Deliveries {
-			needed = needed || delivery.Event.Type == "main.request" && delivery.Delivery.Status == domain.DeliveryStatusPending
+			needed = needed || modelRequestEvent(before.Agent, delivery.Event) && delivery.Delivery.Status == domain.DeliveryStatusPending
 		}
 		if needed {
 			if err := prepare(ctx); err != nil {
@@ -213,7 +231,7 @@ func resolveConversation(ctx context.Context, options commandOptions, open backe
 		if err != nil {
 			return err
 		}
-		if err := runtime.RunAgentUntilIdleContext(ctx, agent.ID); err != nil {
+		if err := runtime.RunAgentTreeUntilIdleContext(ctx, agent.ID); err != nil {
 			return err
 		}
 		query, err = runtime.QueryAgentContext(ctx, agent.ID)
@@ -237,8 +255,22 @@ func writeConversationStatus(output io.Writer, query core.AgentQuery) error {
 			queued++
 		}
 	}
-	_, err := fmt.Fprintf(output, "MainAgent：%s\n状态：%s\n排队输入：%d\n", query.Agent.Name, label, queued)
-	return err
+	if _, err := fmt.Fprintf(output, "MainAgent：%s\n状态：%s\n排队输入：%d\n", query.Agent.Name, label, queued); err != nil {
+		return err
+	}
+	for _, task := range query.Tasks {
+		status := "执行中"
+		if task.CancelRequested {
+			status = "等待取消收尾"
+		}
+		if task.Result != nil {
+			status = string(task.Result.Status)
+		}
+		if _, err := fmt.Fprintf(output, "subagent任务：%s child=%s 状态=%s\n", task.ID, task.ChildAgentID, status); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type conversationInput struct {
@@ -289,9 +321,13 @@ func (input *conversationInput) line(ctx context.Context) (string, error) {
 	}
 }
 
-func chooseConversationResolution(ctx context.Context, input *conversationInput, output io.Writer) (core.ResolutionDecision, bool, error) {
+func chooseConversationResolution(ctx context.Context, input *conversationInput, output io.Writer, abandonOnly bool) (core.ResolutionDecision, bool, error) {
 	for {
-		if _, err := fmt.Fprint(output, "调用结果未知，请选择：1重试（可能再次计费），2放弃本轮，3暂不处理\n选择> "); err != nil {
+		prompt := "调用结果未知，请选择：1重试（可能再次计费），2放弃本轮，3暂不处理\n选择> "
+		if abandonOnly {
+			prompt = "任务已取消，调用结果未知，请选择：2放弃未确认的结果，3暂不处理\n选择> "
+		}
+		if _, err := fmt.Fprint(output, prompt); err != nil {
 			return "", false, err
 		}
 		line, err := input.line(ctx)
@@ -303,6 +339,12 @@ func chooseConversationResolution(ctx context.Context, input *conversationInput,
 		}
 		switch strings.TrimSpace(line) {
 		case "1", "retry", "重试":
+			if abandonOnly {
+				if _, err := fmt.Fprintln(output, "任务已取消，只能放弃未确认的结果或暂不处理"); err != nil {
+					return "", false, err
+				}
+				continue
+			}
 			return core.ResolutionRetry, false, nil
 		case "2", "abandon", "放弃":
 			return core.ResolutionAbandon, false, nil
@@ -311,7 +353,11 @@ func chooseConversationResolution(ctx context.Context, input *conversationInput,
 		case "/exit", "/quit":
 			return "", true, nil
 		}
-		if _, err := fmt.Fprintln(output, "请输入1、2或3。"); err != nil {
+		hint := "请输入1、2或3。"
+		if abandonOnly {
+			hint = "请输入2或3"
+		}
+		if _, err := fmt.Fprintln(output, hint); err != nil {
 			return "", false, err
 		}
 	}
@@ -408,12 +454,15 @@ func runConversationLoop(ctx context.Context, options commandOptions, input *con
 	var deferred domain.ID
 	var lastReceipt *core.ActionResolutionReceipt
 	for {
-		unknown := waitingUnknownConversationAction(query)
+		unknown, err := conversationUnknownAction(ctx, options, open)
+		if err != nil {
+			return err
+		}
 		if unknown != nil && unknown.Action.Request.ID != deferred {
 			decision, reason := options.request.Decision, options.request.Reason
 			if decision == "" {
 				var exit bool
-				decision, exit, err = chooseConversationResolution(ctx, input, output)
+				decision, exit, err = chooseConversationResolution(ctx, input, output, cancelledUnknownAction(query, unknown))
 				if err != nil {
 					return err
 				}

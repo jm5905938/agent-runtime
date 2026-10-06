@@ -63,7 +63,7 @@ func withConversation(ctx context.Context, options commandOptions, open backendO
 		return errors.New("对话绑定不支持模型配置")
 	}
 	if options.request.Command == "chat" || options.request.Command == "resume" {
-		needed, err := modelWorkPendingForAgent(ctx, runtime, agent.ID)
+		needed, err := modelWorkPendingForTree(ctx, runtime, agent.ID)
 		if err != nil {
 			return err
 		}

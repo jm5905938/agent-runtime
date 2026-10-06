@@ -153,7 +153,7 @@ func validateRecoveryRecords(s *MemoryStore) error {
 			return recoveryConflict("孤立的action attempt", id)
 		}
 	}
-	return nil
+	return validateSubagentRecovery(s)
 }
 
 func validateRecoveryExecution(s *MemoryStore, execution domain.Execution, ids map[domain.ID]bool) error {

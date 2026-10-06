@@ -6,7 +6,7 @@ from contextlib import redirect_stdout
 from typing import BinaryIO
 
 from .agent import BusinessError, Runner
-from .agents import EchoAgent, MainAgent
+from .agents import EchoAgent, MainAgent, SubagentAgent
 from .protocol import (
     MAX_FRAME_BYTES,
     VERSION,
@@ -65,7 +65,7 @@ def main() -> int:
     return serve(
         sys.stdin.buffer,
         sys.stdout.buffer,
-        {("echo", "1"): EchoAgent(), ("main", "1"): MainAgent()},
+        {("echo", "1"): EchoAgent(), ("main", "1"): MainAgent(), ("subagent", "1"): SubagentAgent()},
     )
 
 

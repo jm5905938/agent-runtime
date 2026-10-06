@@ -26,6 +26,7 @@ type MemoryStore struct {
 	actions        map[domain.ID]domain.ActionRecord
 	actionOrder    []domain.ID
 	actionAttempts map[domain.ID][]domain.ActionAttempt
+	tasks          map[domain.ID]domain.SubagentTask
 }
 
 var _ StateStore = (*MemoryStore)(nil)
@@ -36,6 +37,7 @@ func NewMemoryStore() *MemoryStore {
 		deliveries: make(map[domain.DeliveryKey]domain.Delivery), executions: make(map[domain.ID]domain.Execution),
 		attempts: make(map[domain.ID][]domain.Attempt), claimVersions: make(map[domain.ID]uint64), actions: make(map[domain.ID]domain.ActionRecord),
 		actionAttempts: make(map[domain.ID][]domain.ActionAttempt),
+		tasks:          make(map[domain.ID]domain.SubagentTask),
 	}
 }
 
@@ -229,6 +231,9 @@ func (s *MemoryStore) ClaimExecution(ctx context.Context, key domain.DeliveryKey
 		return nil, fmt.Errorf("delivery %v不可领取: %w", key, ErrStoreConflict)
 	}
 	agent := s.agents[key.AgentID]
+	if task := s.taskForChild(agent.ID); task != nil && task.CancelRequested && task.Result == nil {
+		return nil, ErrDeliveryNotReady
+	}
 	if agent.Status != domain.AgentStatusActive {
 		return nil, fmt.Errorf("agent %s状态为%s: %w", agent.ID, agent.Status, ErrAgentUnavailable)
 	}
@@ -297,7 +302,7 @@ func (s *MemoryStore) CommitExecution(ctx context.Context, commit ExecutionCommi
 	if _, err := codec.Encode(commit); err != nil {
 		return domain.ExecutionResult{}, fmt.Errorf("提交execution记录: %w", err)
 	}
-	result := domain.ExecutionResult{StateUpdate: cloneMap(commit.StateUpdate)}
+	result := domain.ExecutionResult{StateUpdate: cloneMap(commit.StateUpdate), TaskResult: cloneSubagentResult(commit.TaskResult)}
 	if commit.Actions != nil {
 		result.Actions = make([]domain.Action, 0, len(commit.Actions))
 	}
@@ -316,6 +321,10 @@ func (s *MemoryStore) CommitExecution(ctx context.Context, commit ExecutionCommi
 	if err := (StateManager{}).Apply(&agent, result); err != nil {
 		return domain.ExecutionResult{}, err
 	}
+	task, err := s.prepareTaskCompletion(&agent, execution.ID, commit.TaskResult)
+	if err != nil {
+		return domain.ExecutionResult{}, err
+	}
 	now := time.Now().UTC()
 	attempt.Status, attempt.FinishedAt = domain.AttemptStatusSucceeded, &now
 	execution.Status, execution.FinishedAt, execution.Error = domain.ExecutionStatusCompleted, &now, ""
@@ -324,6 +333,9 @@ func (s *MemoryStore) CommitExecution(ctx context.Context, commit ExecutionCommi
 	delivery.Status = domain.DeliveryStatusCompleted
 	//统一发布本轮写入
 	s.agents[agent.ID] = agent
+	if task != nil {
+		s.tasks[task.ID] = *task
+	}
 	for _, action := range commit.Actions {
 		s.actions[action.Request.ID] = memoryCloneActionRecord(action)
 		s.actionOrder = append(s.actionOrder, action.Request.ID)
@@ -378,6 +390,15 @@ func (s *MemoryStore) FailExecution(ctx context.Context, failure ExecutionFailur
 	if err := validateStoredFailure(failure.Failure); err != nil {
 		return err
 	}
+	agent := cloneAgent(s.agents[execution.AgentID])
+	var task *domain.SubagentTask
+	if !failure.Interrupted && s.taskForChild(agent.ID) != nil {
+		taskResult := &domain.SubagentResult{Status: domain.SubagentStatusFailed, Output: map[string]any{}, Error: memoryCloneFailure(&failure.Failure)}
+		task, err = s.prepareTaskCompletion(&agent, execution.ID, taskResult)
+		if err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	attempt.Status, attempt.FinishedAt = domain.AttemptStatusFailed, &now
 	if failure.Interrupted {
@@ -389,6 +410,9 @@ func (s *MemoryStore) FailExecution(ctx context.Context, failure ExecutionFailur
 	s.executions[execution.ID] = execution
 	s.attempts[execution.ID][len(s.attempts[execution.ID])-1] = attempt
 	s.deliveries[delivery.Key] = delivery
+	if task != nil {
+		s.tasks[task.ID], s.agents[agent.ID] = *task, agent
+	}
 	return nil
 }
 
@@ -397,6 +421,9 @@ func (s *MemoryStore) RequeueDelivery(ctx context.Context, key domain.DeliveryKe
 		return err
 	}
 	defer s.mu.Unlock()
+	if task := s.taskForChild(key.AgentID); task != nil && task.Result != nil {
+		return ErrStoreConflict
+	}
 	delivery, exists := s.deliveries[key]
 	if !exists {
 		return fmt.Errorf("delivery %v: %w", key, ErrStoreNotFound)
@@ -432,9 +459,34 @@ func (s *MemoryStore) ClaimAction(ctx context.Context, actionID domain.ID) (*Act
 		return nil, err
 	}
 	defer s.mu.Unlock()
+	return s.claimAction(actionID, false)
+}
+
+func (s *MemoryStore) ClaimSubagentCancelAction(ctx context.Context, actionID domain.ID) (*ActionClaim, error) {
+	if err := s.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer s.mu.Unlock()
+	return s.claimAction(actionID, true)
+}
+
+func (s *MemoryStore) claimAction(actionID domain.ID, cancellation bool) (*ActionClaim, error) {
 	action, exists := s.actions[actionID]
 	if !exists {
 		return nil, fmt.Errorf("action %s: %w", actionID, ErrStoreNotFound)
+	}
+	task := s.taskForChild(action.AgentID)
+	if cancellation {
+		if task == nil || !task.CancelRequested || task.Result != nil {
+			return nil, ErrStoreConflict
+		}
+	} else if task != nil {
+		if task.Result != nil {
+			return nil, ErrAgentUnavailable
+		}
+		if task.CancelRequested {
+			return nil, ErrActionNotReady
+		}
 	}
 	if action.Status != domain.ActionStatusPending &&
 		!(action.Status == domain.ActionStatusUnknown && action.RecoveryPolicy == domain.RecoveryPolicySafeRetry) {

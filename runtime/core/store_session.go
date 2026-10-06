@@ -157,3 +157,30 @@ func (s *memoryRecoverySession) LoadAction(ctx context.Context, id domain.ID) (*
 func (s *memoryRecoverySession) ListActions(ctx context.Context, statuses ...domain.ActionStatus) ([]domain.ActionRecord, error) {
 	return memorySessionCall(s, ctx, false, func(store *MemoryStore) ([]domain.ActionRecord, error) { return store.ListActions(ctx, statuses...) })
 }
+
+func (s *memoryRecoverySession) SpawnSubagent(ctx context.Context, spawn SubagentSpawn) (*domain.SubagentTask, error) {
+	return memorySessionCall(s, ctx, true, func(store *MemoryStore) (*domain.SubagentTask, error) { return store.SpawnSubagent(ctx, spawn) })
+}
+
+func (s *memoryRecoverySession) LoadSubagentTask(ctx context.Context, id domain.ID) (*domain.SubagentTask, error) {
+	return memorySessionCall(s, ctx, false, func(store *MemoryStore) (*domain.SubagentTask, error) { return store.LoadSubagentTask(ctx, id) })
+}
+
+func (s *memoryRecoverySession) ListSubagentTasks(ctx context.Context) ([]domain.SubagentTask, error) {
+	return memorySessionCall(s, ctx, false, func(store *MemoryStore) ([]domain.SubagentTask, error) { return store.ListSubagentTasks(ctx) })
+}
+
+func (s *memoryRecoverySession) RequestSubagentCancel(ctx context.Context, parentID, id domain.ID) (*domain.SubagentTask, error) {
+	return memorySessionCall(s, ctx, true, func(store *MemoryStore) (*domain.SubagentTask, error) {
+		return store.RequestSubagentCancel(ctx, parentID, id)
+	})
+}
+
+func (s *memoryRecoverySession) FinishSubagentCancel(ctx context.Context, id domain.ID) error {
+	_, err := memorySessionCall(s, ctx, true, func(store *MemoryStore) (struct{}, error) { return struct{}{}, store.FinishSubagentCancel(ctx, id) })
+	return err
+}
+
+func (s *memoryRecoverySession) ClaimSubagentCancelAction(ctx context.Context, id domain.ID) (*ActionClaim, error) {
+	return memorySessionCall(s, ctx, true, func(store *MemoryStore) (*ActionClaim, error) { return store.ClaimSubagentCancelAction(ctx, id) })
+}

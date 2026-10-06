@@ -42,6 +42,7 @@ func runMigrations(ctx context.Context, db *sql.DB) error {
 	for _, file := range []string{
 		"migrations/002_batch_b.sql",
 		"migrations/003_actions.sql",
+		"migrations/004_subagents.sql",
 	} {
 		content, err := migrationFiles.ReadFile(file)
 		if err != nil {
@@ -93,6 +94,7 @@ func verifySchema(ctx context.Context, tx *sql.Tx) error {
 		`SELECT id, execution_id, number, status, started_at, finished_at, failure_json, expected_state_version FROM execution_attempts LIMIT 0`,
 		`SELECT sequence, id, execution_id, agent_id, request_json, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json FROM actions LIMIT 0`,
 		`SELECT id, action_id, number, status, started_at, finished_at, failure_json FROM action_attempts LIMIT 0`,
+		`SELECT id, parent_agent_id, child_agent_id, initial_event_id, completion_execution_id, cancel_requested, result_json FROM subagent_tasks LIMIT 0`,
 	} {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {

@@ -268,10 +268,11 @@ func TestMainQueueSQLiteCommandsAcrossProcesses(t *testing.T) {
 			if saved.Action.Request.ID == firstModel.Request.ID {
 				found = true
 				if saved.Action.Status != domain.ActionStatusFailed || saved.Action.AttemptCount != 1 ||
-					saved.Action.ResultEventID != firstModel.ResultEventID || !reflect.DeepEqual(saved.Action.Request, firstModel.Request) ||
+					saved.Action.ResultEventID != firstModel.ResultEventID ||
 					saved.Action.Result == nil || saved.Action.Result.Error == nil || saved.Action.Result.Error.Message != "已保存的模型失败" {
 					t.Fatalf("恢复改变或丢失已保存模型失败: %+v", saved.Action)
 				}
+				mainToolsAssertJSON(t, saved.Action.Request, firstModel.Request)
 			}
 		}
 		if !found {
@@ -423,9 +424,11 @@ func TestMainQueueSQLiteCommandsAcrossProcesses(t *testing.T) {
 				}
 				for _, saved := range after.Query.Actions {
 					for _, original := range []domain.ActionRecord{firstModel, toolAction, finalModel} {
-						if original.Request.ID != "" && original.Request.ID == saved.Action.Request.ID &&
-							(!reflect.DeepEqual(original.Request, saved.Action.Request) || original.ResultEventID != saved.Action.ResultEventID || saved.Action.AttemptCount != 1) {
-							t.Fatalf("排队恢复改变了已保存action身份、输入或尝试次数: %+v", saved.Action)
+						if original.Request.ID != "" && original.Request.ID == saved.Action.Request.ID {
+							if original.ResultEventID != saved.Action.ResultEventID || saved.Action.AttemptCount != 1 {
+								t.Fatalf("排队恢复改变了已保存action身份、输入或尝试次数: %+v", saved.Action)
+							}
+							mainToolsAssertJSON(t, saved.Action.Request, original.Request)
 						}
 					}
 				}

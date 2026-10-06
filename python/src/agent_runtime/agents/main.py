@@ -216,7 +216,7 @@ class MainAgent:
     def _model_action(self, context: ExecutionContext, update: JSONObject) -> ExecutionResult:
         if _json_size(update["pending_messages"]) > MAX_PENDING_BYTES:
             return self._finish(context, update, error="本轮工具调用轨迹超过128KiB")
-        builder = self.prompt_builder or PromptBuilder.from_env()
+        builder = self._prompt_builder(context)
         try:
             messages = builder.build(_turns(update["messages"]), update["pending_messages"])
         except PromptTooLong as error:
@@ -233,6 +233,9 @@ class MainAgent:
             waiting_execution_id=context.execution_id,
         )
         return ExecutionResult(state_update=deepcopy(update), actions=[action])
+
+    def _prompt_builder(self, context: ExecutionContext) -> PromptBuilder:
+        return self.prompt_builder or PromptBuilder.from_env()
 
     def _on_resolution(
         self, context: ExecutionContext, state: JSONObject, history: list[JSONObject], legacy: bool

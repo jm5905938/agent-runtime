@@ -120,6 +120,38 @@ class ToolTests(unittest.TestCase):
         action = registry.create_action(tool_call("agent_status", '{"agent_id":"agent-2"}'), self.context)
         self.assertEqual(action.payload, {"agent_id": "agent-2"})
 
+    def test_subagent_tools_keep_task_identity_in_runtime(self):
+        registry = default_tools()
+        payloads = {
+            "spawn_subagent": {"message": "检查当前状态", "context": "只读", "name": "检查"},
+            "wait_subagent": {"task_id": "task-1"},
+            "cancel_subagent": {"task_id": "task-1"},
+        }
+        for name, payload in payloads.items():
+            with self.subTest(name=name):
+                action = registry.create_action(tool_call(name, json.dumps(payload)), self.context)
+                self.assertEqual(action.type, "tool." + name)
+                self.assertEqual(action.payload, payload)
+                self.assertNotIn("parent_agent_id", action.payload)
+        minimal = registry.create_action(tool_call("spawn_subagent", '{"message":"任务"}'), self.context)
+        self.assertEqual(minimal.payload, {"message": "任务"})
+
+    def test_subagent_tools_reject_invalid_and_spoofed_parameters(self):
+        registry = default_tools()
+        invalid = {
+            "spawn_subagent": [
+                {}, {"message": " "}, {"message": 3},
+                {"message": "任务", "context": None}, {"message": "任务", "name": []},
+                {"message": "任务", "parent_agent_id": "other"},
+            ],
+            "wait_subagent": [{}, {"task_id": " "}, {"task_id": 3}, {"task_id": "task", "other": 1}],
+            "cancel_subagent": [{}, {"task_id": ""}, {"task_id": None}, {"task_id": "task", "child_id": "other"}],
+        }
+        for name, cases in invalid.items():
+            for arguments in cases:
+                with self.subTest(name=name, arguments=arguments), self.assertRaises(ValueError):
+                    registry.create_action(tool_call(name, json.dumps(arguments)), self.context)
+
 
 if __name__ == "__main__":
     unittest.main()

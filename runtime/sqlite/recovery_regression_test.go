@@ -56,7 +56,7 @@ func recoveryFixture(t *testing.T) (*Backend, *Session, *core.ExecutionClaim, do
 func recoveryDatabaseSnapshot(t *testing.T, b *Backend) map[string][][]any {
 	t.Helper()
 	result := make(map[string][][]any)
-	for _, table := range []string{"agents", "events", "deliveries", "executions", "execution_attempts", "actions", "action_attempts"} {
+	for _, table := range []string{"agents", "events", "deliveries", "executions", "execution_attempts", "actions", "action_attempts", "subagent_tasks"} {
 		rows, err := b.db.Query("SELECT * FROM " + table + " ORDER BY rowid")
 		if err != nil {
 			t.Fatal(err)

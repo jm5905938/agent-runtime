@@ -66,14 +66,14 @@ func (r *Runtime) ResolveAction(ctx context.Context, actionID domain.ID, decisio
 	if action.Request.ExecutionID == nil {
 		return ActionResolutionReceipt{}, fmt.Errorf("action缺少来源execution: %w", ErrStoreConflict)
 	}
-	if action.Status != domain.ActionStatusUnknown || action.RecoveryPolicy != domain.RecoveryPolicyManual || action.Request.Type != "model.generate" {
+	if action.Status != domain.ActionStatusUnknown {
 		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的model.generate: %w", ErrStoreConflict)
 	}
 	agent, err := r.store.LoadAgent(ctx, action.AgentID)
 	if err != nil {
 		return ActionResolutionReceipt{}, err
 	}
-	if agent.Definition != (domain.DefinitionRef{ID: "main", Version: "1"}) {
+	if agent.Definition != (domain.DefinitionRef{ID: "main", Version: "1"}) && agent.Definition != (domain.DefinitionRef{ID: "subagent", Version: "1"}) {
 		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理main的模型调用: %w", ErrStoreConflict)
 	}
 	resolution := ActionResolution{ActionID: actionID, EventID: actionResolutionEventID(actionID), Decision: decision, Reason: reason}
@@ -101,6 +101,17 @@ func (r *Runtime) ResolveAction(ctx context.Context, actionID domain.ID, decisio
 	agent, err = r.store.LoadAgent(ctx, action.AgentID)
 	if err != nil {
 		return ActionResolutionReceipt{}, err
+	}
+	cancelled, err := r.subagentCancelled(ctx, agent.ID)
+	if err != nil {
+		return ActionResolutionReceipt{}, err
+	}
+	model := action.Request.Type == "model.generate" && action.RecoveryPolicy == domain.RecoveryPolicyManual
+	if !model && !(cancelled && agent.Definition == (domain.DefinitionRef{ID: "subagent", Version: "1"}) && decision == ResolutionAbandon) {
+		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的model.generate: %w", ErrStoreConflict)
+	}
+	if cancelled && decision == ResolutionRetry {
+		return ActionResolutionReceipt{}, fmt.Errorf("已请求取消的subagent不能重试模型调用: %w", ErrStoreConflict)
 	}
 	if agent.Status != domain.AgentStatusActive {
 		return ActionResolutionReceipt{}, fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
@@ -157,7 +168,7 @@ func (r *Runtime) existingResolution(ctx context.Context, agentID domain.ID, eve
 }
 
 func resolutionFromEvent(action domain.ActionRecord, event domain.Event) *ActionResolution {
-	if action.Request.ExecutionID == nil || action.Status != domain.ActionStatusUnknown || action.RecoveryPolicy != domain.RecoveryPolicyManual || action.Request.Type != "model.generate" ||
+	if action.Request.ExecutionID == nil || action.Status != domain.ActionStatusUnknown ||
 		event.ID != actionResolutionEventID(action.Request.ID) || event.Type != ActionResolutionEventType ||
 		event.Payload["action_id"] != string(action.Request.ID) || event.Payload["action_type"] != action.Request.Type ||
 		event.Payload["execution_id"] != string(*action.Request.ExecutionID) {
@@ -166,6 +177,9 @@ func resolutionFromEvent(action domain.ActionRecord, event domain.Event) *Action
 	decision, _ := event.Payload["decision"].(string)
 	reason, _ := event.Payload["reason"].(string)
 	if (ResolutionDecision(decision) != ResolutionRetry && ResolutionDecision(decision) != ResolutionAbandon) || !validResolutionReason(reason) {
+		return nil
+	}
+	if (action.Request.Type != "model.generate" || action.RecoveryPolicy != domain.RecoveryPolicyManual) && ResolutionDecision(decision) != ResolutionAbandon {
 		return nil
 	}
 	return &ActionResolution{ActionID: action.Request.ID, EventID: event.ID, Decision: ResolutionDecision(decision), Reason: reason}

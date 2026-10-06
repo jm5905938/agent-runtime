@@ -171,6 +171,11 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	if agent.Status != domain.AgentStatusActive {
 		return ExecutionResult{}, fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
 	}
+	if cancelled, err := r.subagentCancelled(ctx, agent.ID); err != nil {
+		return ExecutionResult{}, &storeFailureError{cause: err}
+	} else if cancelled {
+		return ExecutionResult{}, ErrDeliveryNotReady
+	}
 	r.mu.Lock()
 	runner := r.definitions[agent.Definition]
 	err = r.bindingError(agent.Definition)
@@ -253,7 +258,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 		return ExecutionResult{}, r.failExecution(ctx, claim.Token, domain.ErrorKindRuntime, err)
 	}
 	committed, err := r.store.CommitExecution(ctx, ExecutionCommit{
-		Token: claim.Token, StateUpdate: cloneMap(result.StateUpdate), Actions: actions,
+		Token: claim.Token, StateUpdate: cloneMap(result.StateUpdate), Actions: actions, TaskResult: cloneSubagentResult(result.TaskResult),
 	})
 	if err != nil {
 		//提交报错也可能已生效，不能改记失败
@@ -283,6 +288,9 @@ func (r *Runtime) nonPendingDeliveryResult(ctx context.Context, delivery domain.
 }
 
 func (r *Runtime) resolveClaimError(ctx context.Context, key domain.DeliveryKey, cause error) (ExecutionResult, error) {
+	if errors.Is(cause, ErrDeliveryNotReady) {
+		return ExecutionResult{}, cause
+	}
 	if !errors.Is(cause, ErrStoreConflict) && !errors.Is(cause, ErrStoreStaleClaim) &&
 		!errors.Is(cause, ErrExecutionInProgress) && !errors.Is(cause, ErrDeliveryFailed) && !errors.Is(cause, ErrAgentUnavailable) {
 		return ExecutionResult{}, &storeFailureError{cause: cause}
@@ -426,6 +434,17 @@ func (r *Runtime) RunAgentUntilIdleContext(ctx context.Context, agentID domain.I
 }
 
 func (r *Runtime) runUntilIdleContext(ctx context.Context, agentID domain.ID) error {
+	return r.runScopedUntilIdleContext(ctx, agentID, false)
+}
+
+func (r *Runtime) RunAgentTreeUntilIdleContext(ctx context.Context, agentID domain.ID) error {
+	if agentID == "" {
+		return fmt.Errorf("推进agent任务树: agent id不能为空")
+	}
+	return r.runScopedUntilIdleContext(ctx, agentID, true)
+}
+
+func (r *Runtime) runScopedUntilIdleContext(ctx context.Context, agentID domain.ID, tree bool) error {
 	done, err := r.enter()
 	if err != nil {
 		return err
@@ -455,13 +474,42 @@ func (r *Runtime) runUntilIdleContext(ctx context.Context, agentID domain.ID) er
 		if r.isStopping() {
 			return nil
 		}
+		var scope map[domain.ID]bool
+		if agentID != "" {
+			scope = map[domain.ID]bool{agentID: true}
+			if tree {
+				ids, err := r.AgentTreeContext(ctx, agentID)
+				if err != nil {
+					return err
+				}
+				for _, id := range ids {
+					scope[id] = true
+				}
+			}
+		}
+		progress := false
+		if store, ok := r.store.(SubagentStore); ok {
+			tasks, err := store.ListSubagentTasks(ctx)
+			if err != nil {
+				return err
+			}
+			for _, task := range tasks {
+				if !task.CancelRequested || task.Result != nil || scope != nil && !scope[task.ChildAgentID] {
+					continue
+				}
+				finished, err := r.settleSubagentCancel(ctx, task)
+				if err != nil {
+					return err
+				}
+				progress = progress || finished
+			}
+		}
 		deliveries, err := r.store.ListDeliveries(ctx, domain.DeliveryStatusPending)
 		if err != nil {
 			return err
 		}
-		progress := false
 		for _, delivery := range deliveries {
-			if agentID != "" && delivery.Key.AgentID != agentID {
+			if scope != nil && !scope[delivery.Key.AgentID] {
 				continue
 			}
 			if r.isStopping() {
@@ -490,7 +538,7 @@ func (r *Runtime) runUntilIdleContext(ctx context.Context, agentID domain.ID) er
 			return err
 		}
 		for _, action := range actions {
-			if agentID != "" && action.AgentID != agentID {
+			if scope != nil && !scope[action.AgentID] {
 				continue
 			}
 			if r.isStopping() {
@@ -504,7 +552,7 @@ func (r *Runtime) runUntilIdleContext(ctx context.Context, agentID domain.ID) er
 				if _, storageFailure := err.(*storeFailureError); storageFailure {
 					return err
 				}
-				if errors.Is(err, ErrAgentUnavailable) || errors.Is(err, ErrHandlerUnavailable) || errors.Is(err, ErrExecutionInProgress) {
+				if errors.Is(err, ErrAgentUnavailable) || errors.Is(err, ErrHandlerUnavailable) || errors.Is(err, ErrExecutionInProgress) || errors.Is(err, ErrActionNotReady) {
 					continue
 				}
 				return err

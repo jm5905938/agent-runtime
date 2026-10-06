@@ -36,6 +36,12 @@ func (StateManager) Apply(agent *domain.AgentInstance, result ExecutionResult) e
 }
 
 func validateResult(result ExecutionResult) error {
+	if err := ValidateSubagentResult(result.TaskResult); err != nil {
+		return err
+	}
+	if result.TaskResult != nil && len(result.Actions) != 0 {
+		return fmt.Errorf("结束subagent时不能提交新action")
+	}
 	if err := codec.ValidateData(result.StateUpdate); err != nil {
 		return fmt.Errorf("状态更新: %w", err)
 	}

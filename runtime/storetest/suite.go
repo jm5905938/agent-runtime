@@ -44,6 +44,15 @@ func Run(t *testing.T, newBackend func(*testing.T) core.RecoveryStore) {
 		{"session_recovery", testSessionRecovery},
 		{"recovery_existing_unknown", testRecoveryReportsExistingUnknown},
 		{"recovery_after_attempt_history", testRecoveryAfterAttemptHistory},
+		{"subagent_spawn_validation", testSubagentSpawnValidation},
+		{"subagent_spawn_recovery", testSubagentSpawnRecovery},
+		{"subagent_completion", testSubagentCompletion},
+		{"subagent_completion_validation", testSubagentCompletionValidation},
+		{"subagent_completion_pending_action", testSubagentCompletionPendingAction},
+		{"subagent_failure_interruption", testSubagentFailureInterruption},
+		{"subagent_cancel_busy", testSubagentCancelBusy},
+		{"subagent_cancel_claims", testSubagentCancelClaims},
+		{"subagent_session_gates", testSubagentSessionGates},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			backend := newBackend(t)

@@ -200,6 +200,11 @@ func loadRecoveryRecords(ctx context.Context, tx *sql.Tx) (core.RecoveryRecords,
 			return core.RecoveryRecords{}, closeErr
 		}
 	}
+	tasks, err := listSubagentTasks(ctx, tx)
+	if err != nil {
+		return core.RecoveryRecords{}, err
+	}
+	records.Tasks = tasks
 	return records, nil
 }
 

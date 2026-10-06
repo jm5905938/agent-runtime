@@ -26,14 +26,14 @@ func (runner mainAgentRunner) RunContext(ctx context.Context, input core.Executi
 }
 
 func (runner mainAgentRunner) DeliveryBlockedBy(agent core.AgentSnapshot, event domain.Event, earlier []domain.Event) []core.BlockReason {
-	if event.Type != "main.request" {
+	if !modelRequestEvent(agent, event) {
 		return nil
 	}
 	if agent.State["request_status"] == "waiting" {
 		return []core.BlockReason{{Code: core.BlockAgentWaiting, Message: "当前请求等待模型或工具结果，新输入保留在队列中"}}
 	}
 	for _, previous := range earlier {
-		if previous.Type == "main.request" {
+		if modelRequestEvent(agent, previous) {
 			return []core.BlockReason{{Code: core.BlockEarlierInput, Message: "较早的用户输入尚未处理，按接收顺序等待"}}
 		}
 	}

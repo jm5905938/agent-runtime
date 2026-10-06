@@ -36,6 +36,7 @@ type ExecutionCommit struct {
 	Token       ExecutionToken
 	StateUpdate map[string]any
 	Actions     []domain.ActionRecord
+	TaskResult  *domain.SubagentResult
 }
 
 type ExecutionFailure struct {

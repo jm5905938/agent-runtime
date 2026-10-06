@@ -64,15 +64,6 @@ func (s *Session) CreateAgent(
 
 	defer s.backend.unlock()
 
-	if err := validateAgent(agent); err != nil {
-		return err
-	}
-
-	stateJSON, err := encodeAgentState(agent.State)
-	if err != nil {
-		return err
-	}
-
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf(
@@ -81,6 +72,25 @@ func (s *Session) CreateAgent(
 		)
 	}
 	defer tx.Rollback()
+
+	if err := createAgentTx(ctx, tx, agent); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create agent: %w", err)
+	}
+	return nil
+}
+
+func createAgentTx(ctx context.Context, tx *sql.Tx, agent domain.AgentInstance) error {
+	if err := validateAgent(agent); err != nil {
+		return err
+	}
+
+	stateJSON, err := encodeAgentState(agent.State)
+	if err != nil {
+		return err
+	}
 
 	var exists int
 	err = tx.QueryRowContext(
@@ -127,13 +137,6 @@ func (s *Session) CreateAgent(
 	if err != nil {
 		return fmt.Errorf(
 			"insert agent: %w",
-			err,
-		)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf(
-			"commit create agent: %w",
 			err,
 		)
 	}

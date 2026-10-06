@@ -52,7 +52,7 @@ func decodeResponse(data []byte, input core.ExecutionContext) (result core.Execu
 		return core.ExecutionResult{}, failure(domain.ErrorKind(kind), message, nil), true
 	}
 	reply, ok := fields["result"].(map[string]any)
-	if !ok || !objectFields(reply, []string{"state_update", "actions"}) {
+	if !ok || !objectFields(reply, []string{"state_update", "actions"}, "task_result") {
 		return invalid("result字段无效")
 	}
 	state, hasState := reply["state_update"].(map[string]any)
@@ -86,6 +86,37 @@ func decodeResponse(data []byte, input core.ExecutionContext) (result core.Execu
 			action.BindExecution(input.ExecutionID)
 		}
 		result.Actions = append(result.Actions, action)
+	}
+	if value, exists := reply["task_result"]; exists {
+		task, ok := value.(map[string]any)
+		if !ok || !objectFields(task, []string{"status", "output"}, "error") {
+			return invalid("task_result字段无效")
+		}
+		status, hasStatus := task["status"].(string)
+		output, hasOutput := task["output"].(map[string]any)
+		if !hasStatus || !hasOutput || (status != string(domain.SubagentStatusSucceeded) &&
+			status != string(domain.SubagentStatusFailed) && status != string(domain.SubagentStatusCancelled)) {
+			return invalid("task_result需要最终status和output对象")
+		}
+		result.TaskResult = &domain.SubagentResult{Status: domain.SubagentStatus(status), Output: output}
+		problem, hasError := task["error"]
+		if status == string(domain.SubagentStatusFailed) && !hasError {
+			return invalid("失败的task_result需要error")
+		}
+		if hasError {
+			fields, ok := problem.(map[string]any)
+			if status == string(domain.SubagentStatusSucceeded) || !ok || !objectFields(fields, []string{"kind", "message"}) {
+				return invalid("task_result.error字段无效")
+			}
+			kind, hasKind := fields["kind"].(string)
+			message, hasMessage := fields["message"].(string)
+			if !hasKind || !hasMessage || strings.TrimSpace(message) == "" ||
+				(kind != string(domain.ErrorKindBusiness) && kind != string(domain.ErrorKindRuntime) &&
+					kind != string(domain.ErrorKindInterrupted) && kind != string(domain.ErrorKindUnknown)) {
+				return invalid("task_result.error需要有效kind和非空message")
+			}
+			result.TaskResult.Error = &domain.Failure{Kind: domain.ErrorKind(kind), Message: message}
+		}
 	}
 	return result, nil, true
 }

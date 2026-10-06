@@ -24,6 +24,8 @@ const (
 	BlockAgentWaiting          QueryBlockCode = "agent_waiting_result"
 	BlockEarlierInput          QueryBlockCode = "earlier_input_pending"
 	BlockActionResolved        QueryBlockCode = "action_resolved"
+	BlockSubagentWaiting       QueryBlockCode = "subagent_waiting"
+	BlockSubagentCancelling    QueryBlockCode = "subagent_cancelling"
 )
 
 type BlockReason struct {
@@ -32,10 +34,11 @@ type BlockReason struct {
 }
 
 type AgentQuery struct {
-	Agent           AgentSnapshot   `json:"agent"`
-	Deliveries      []DeliveryQuery `json:"deliveries"`
-	Actions         []ActionQuery   `json:"actions"`
-	StartupRecovery RecoveryReport  `json:"startup_recovery"`
+	Agent           AgentSnapshot         `json:"agent"`
+	Deliveries      []DeliveryQuery       `json:"deliveries"`
+	Actions         []ActionQuery         `json:"actions"`
+	StartupRecovery RecoveryReport        `json:"startup_recovery"`
+	Tasks           []domain.SubagentTask `json:"tasks,omitempty"`
 }
 
 type DeliveryQuery struct {
@@ -95,6 +98,21 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		Agent: r.queryAgentSnapshot(*agent), Deliveries: make([]DeliveryQuery, 0),
 		Actions: make([]ActionQuery, 0), StartupRecovery: r.RecoveryReport(),
 	}
+	if store, ok := r.store.(SubagentStore); ok {
+		tasks, err := store.ListSubagentTasks(ctx)
+		if err != nil {
+			return AgentQuery{}, err
+		}
+		for _, task := range tasks {
+			if task.ParentAgentID == agentID || task.ChildAgentID == agentID {
+				result.Tasks = append(result.Tasks, cloneSubagentTask(task))
+			}
+		}
+	}
+	cancelled, err := r.subagentCancelled(ctx, agentID)
+	if err != nil {
+		return AgentQuery{}, err
+	}
 	deliveries, err := r.store.ListDeliveries(ctx)
 	if err != nil {
 		return AgentQuery{}, err
@@ -119,6 +137,9 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		query := &result.Deliveries[i]
 		query.setReadiness(result.Agent, running)
 		if query.Delivery.Status == domain.DeliveryStatusPending {
+			if cancelled {
+				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消已登记，停止新工作"})
+			}
 			blocked, err := deliveryBlockedBy(runner, result.Agent, query.Event, earlier)
 			if err != nil {
 				return AgentQuery{}, err
@@ -161,6 +182,23 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 			query.Resolution = resolutionFromEvent(query.Action, event)
 		}
 		r.setActionReadiness(&query, result.Agent)
+		if query.Ready {
+			if cancelled {
+				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消已登记，停止新工作"})
+			}
+			handler, err := r.executor.handlerFor(query.Action)
+			if err != nil {
+				return AgentQuery{}, err
+			}
+			if gate, ok := handler.(ActionGate); ok {
+				blocked, err := gate.ActionBlockedBy(ctx, query.Action)
+				if err != nil {
+					return AgentQuery{}, err
+				}
+				query.BlockedBy = append(query.BlockedBy, blocked...)
+			}
+			query.Ready = len(query.BlockedBy) == 0
+		}
 		result.Actions = append(result.Actions, query)
 	}
 	return result, nil

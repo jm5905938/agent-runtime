@@ -69,7 +69,7 @@ func mainToolsReadRequest(t *testing.T, r *http.Request) mainToolsModelRequest {
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		t.Errorf("读取模型请求: %v", err)
 	}
-	if request.Model != "test-model" || request.Stream || len(request.Tools) != 1 {
+	if request.Model != "test-model" || request.Stream || (len(request.Tools) != 1 && len(request.Tools) != 4) {
 		t.Errorf("模型请求缺少工具声明: %+v", request)
 		return request
 	}
@@ -77,6 +77,14 @@ func mainToolsReadRequest(t *testing.T, r *http.Request) mainToolsModelRequest {
 	if request.Tools[0]["type"] != "function" || !ok || function["name"] != "agent_status" {
 		t.Errorf("agent_status工具声明错误: %+v", request.Tools)
 		return request
+	}
+	if len(request.Tools) == 4 {
+		for i, name := range []string{"spawn_subagent", "wait_subagent", "cancel_subagent"} {
+			function, ok := request.Tools[i+1]["function"].(map[string]any)
+			if !ok || function["name"] != name {
+				t.Errorf("subagent工具声明错误: %+v", request.Tools)
+			}
+		}
 	}
 	parameters, ok := function["parameters"].(map[string]any)
 	if !ok || parameters["type"] != "object" {
@@ -419,13 +427,16 @@ func TestMainToolsSQLiteCommandsAcrossProcesses(t *testing.T) {
 				for _, saved := range after.Query.Actions {
 					if saved.Action.Request.ID == firstModel.Request.ID {
 						seenFirst = true
-						if saved.Action.ResultEventID != firstModel.ResultEventID || !reflect.DeepEqual(saved.Action.Request, firstModel.Request) {
+						if saved.Action.ResultEventID != firstModel.ResultEventID {
 							t.Fatal("恢复改变首个模型action身份或快照")
 						}
+						mainToolsAssertJSON(t, saved.Action.Request, firstModel.Request)
 					}
-					if toolAction.Request.ID != "" && saved.Action.Request.ID == toolAction.Request.ID &&
-						(saved.Action.ResultEventID != toolAction.ResultEventID || !reflect.DeepEqual(saved.Action.Request, toolAction.Request)) {
-						t.Fatal("恢复改变已保存工具action身份或快照")
+					if toolAction.Request.ID != "" && saved.Action.Request.ID == toolAction.Request.ID {
+						if saved.Action.ResultEventID != toolAction.ResultEventID {
+							t.Fatal("恢复改变已保存工具action身份或快照")
+						}
+						mainToolsAssertJSON(t, saved.Action.Request, toolAction.Request)
 					}
 				}
 				if !seenFirst {

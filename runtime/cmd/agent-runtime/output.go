@@ -121,6 +121,11 @@ func writeAgentQuery(output *strings.Builder, query core.AgentQuery) error {
 		}
 		writeBlockReasons(output, item.BlockedBy)
 	}
+	for _, task := range query.Tasks {
+		if err := writeJSONValue(output, "subagent_task", task); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

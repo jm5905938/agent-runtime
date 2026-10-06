@@ -4,6 +4,7 @@ import (
 	"agent-runtime/core"
 	"agent-runtime/domain"
 	"context"
+	"strings"
 )
 
 // Check before advancing deliveries so missing model configuration leaves the
@@ -38,6 +39,28 @@ func modelWorkPendingForAgent(ctx context.Context, runtime *core.Runtime, agentI
 	return queryNeedsModel(query), nil
 }
 
+func modelWorkPendingForTree(ctx context.Context, runtime *core.Runtime, agentID domain.ID) (bool, error) {
+	agents, err := runtime.AgentTreeContext(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range agents {
+		needed, err := modelWorkPendingForAgent(ctx, runtime, id)
+		if err != nil || needed {
+			return needed, err
+		}
+	}
+	return false, nil
+}
+
+func modelAgentDefinition(definition domain.DefinitionRef) bool {
+	return definition.Version == "1" && (definition.ID == "main" || definition.ID == "subagent")
+}
+
+func modelRequestEvent(agent core.AgentSnapshot, event domain.Event) bool {
+	return modelAgentDefinition(agent.Definition) && event.Type == agent.Definition.ID+".request"
+}
+
 func queryNeedsModel(query core.AgentQuery) bool {
 	agent := query.Agent
 	if agent.Status != domain.AgentStatusActive {
@@ -52,8 +75,7 @@ func queryNeedsModel(query core.AgentQuery) bool {
 		return true
 	}
 	for _, action := range query.Actions {
-		if agent.Definition == (domain.DefinitionRef{ID: "main", Version: "1"}) &&
-			action.Action.Request.Type == agentStatusActionType && action.Ready {
+		if modelAgentDefinition(agent.Definition) && strings.HasPrefix(action.Action.Request.Type, "tool.") && action.Ready {
 			return true
 		}
 		if action.Action.Request.Type != "model.generate" {
@@ -79,10 +101,10 @@ func queryNeedsModel(query core.AgentQuery) bool {
 }
 
 func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
-	if !delivery.Ready || agent.Definition != (domain.DefinitionRef{ID: "main", Version: "1"}) {
+	if !delivery.Ready || !modelAgentDefinition(agent.Definition) {
 		return false
 	}
-	if delivery.Event.Type == "main.request" {
+	if modelRequestEvent(agent, delivery.Event) {
 		return true
 	}
 	if waitingResolutionMatches(agent, delivery) {
@@ -93,7 +115,7 @@ func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) b
 	}
 	payload := delivery.Event.Payload
 	actionType, _ := payload["action_type"].(string)
-	if actionType == agentStatusActionType {
+	if strings.HasPrefix(actionType, "tool.") {
 		return payload["status"] == "succeeded" || payload["status"] == "failed"
 	}
 	if actionType != "model.generate" || payload["status"] != "succeeded" {
@@ -109,12 +131,11 @@ func waitingResultMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery)
 }
 
 func waitingResolutionMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
-	return delivery.Event.Type == core.ActionResolutionEventType && delivery.Event.Payload["action_type"] == "model.generate" &&
-		waitingActionMatches(agent, delivery)
+	return delivery.Event.Type == core.ActionResolutionEventType && waitingActionMatches(agent, delivery)
 }
 
 func waitingActionMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
-	if !delivery.Ready || agent.Definition != (domain.DefinitionRef{ID: "main", Version: "1"}) ||
+	if !delivery.Ready || !modelAgentDefinition(agent.Definition) ||
 		agent.State["request_status"] != "waiting" {
 		return false
 	}
@@ -141,7 +162,7 @@ func waitingActionMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery)
 func queuedInputNeedsModel(agent core.AgentSnapshot, deliveries []core.DeliveryQuery) bool {
 	queued, resultPending := false, false
 	for _, delivery := range deliveries {
-		if delivery.Event.Type == "main.request" && delivery.Delivery.Status == domain.DeliveryStatusPending {
+		if modelRequestEvent(agent, delivery.Event) && delivery.Delivery.Status == domain.DeliveryStatusPending {
 			blocked := false
 			for _, reason := range delivery.BlockedBy {
 				if reason.Code != core.BlockAgentWaiting && reason.Code != core.BlockEarlierInput {

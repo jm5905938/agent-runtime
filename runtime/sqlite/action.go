@@ -17,6 +17,14 @@ func (s *Session) ClaimAction(
 	ctx context.Context,
 	actionID domain.ID,
 ) (*core.ActionClaim, error) {
+	return s.claimAction(ctx, actionID, false)
+}
+
+func (s *Session) ClaimSubagentCancelAction(ctx context.Context, actionID domain.ID) (*core.ActionClaim, error) {
+	return s.claimAction(ctx, actionID, true)
+}
+
+func (s *Session) claimAction(ctx context.Context, actionID domain.ID, cancel bool) (*core.ActionClaim, error) {
 	if err := s.lock(ctx, true); err != nil {
 		return nil, err
 	}
@@ -70,6 +78,23 @@ func (s *Session) ClaimAction(
 	attemptCount, err := strconv.ParseUint(attemptCountText, 10, 64)
 	if err != nil {
 		return nil, err
+	}
+
+	task, err := loadChildSubagentTask(ctx, tx, domain.ID(agentID))
+	if err != nil && !errors.Is(err, core.ErrStoreNotFound) {
+		return nil, err
+	}
+	if cancel {
+		if task == nil || !task.CancelRequested || task.Result != nil {
+			return nil, core.ErrStoreConflict
+		}
+	} else if task != nil {
+		if task.Result != nil {
+			return nil, core.ErrAgentUnavailable
+		}
+		if task.CancelRequested {
+			return nil, core.ErrActionNotReady
+		}
 	}
 
 	currentStatus := domain.ActionStatus(status)
