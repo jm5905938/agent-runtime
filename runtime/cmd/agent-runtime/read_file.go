@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,10 @@ func (handler readFileHandler) Execute(action domain.Action) (map[string]any, er
 	if err != nil {
 		return nil, errors.New("read_file根目录无效")
 	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, errors.New("read_file根目录无效")
+	}
 
 	candidate := filepath.Join(root, filepath.Clean(path))
 	relative, err := filepath.Rel(root, candidate)
@@ -45,7 +50,19 @@ func (handler readFileHandler) Execute(action domain.Action) (map[string]any, er
 		return nil, errors.New("read_file路径超出允许目录")
 	}
 
-	info, err := os.Stat(candidate)
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return nil, fmt.Errorf("read_file读取失败: %w", err)
+	}
+
+	resolvedRelative, err := filepath.Rel(root, resolved)
+	if err != nil || resolvedRelative == ".." ||
+		strings.HasPrefix(resolvedRelative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("read_file路径超出允许目录")
+
+	}
+
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("read_file读取失败: %w", err)
 	}
@@ -56,10 +73,20 @@ func (handler readFileHandler) Execute(action domain.Action) (map[string]any, er
 		return nil, errors.New("read_file文件超过64KiB")
 	}
 
-	content, err := os.ReadFile(candidate)
+	file, err := os.Open(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("read_file读取失败: %w", err)
 	}
+	defer file.Close()
+
+	content, err := io.ReadAll(io.LimitReader(file, maxReadFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read_file读取失败: %w", err)
+	}
+	if len(content) > maxReadFileBytes {
+		return nil, errors.New("read_file文件超过64KiB")
+	}
+
 	if !utf8.Valid(content) {
 		return nil, errors.New("read_file只支持有效UTF-8文本")
 	}
