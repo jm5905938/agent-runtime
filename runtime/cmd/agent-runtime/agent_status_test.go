@@ -132,6 +132,13 @@ func agentStatusFixture(t *testing.T, actionType string) (*core.Runtime, core.Re
 	if err := registerAgentStatus(ctx, runtime); err != nil {
 		t.Fatal(err)
 	}
+	if err := runtime.Executor().RegisterWithOptions(
+		writeFileActionType,
+		writeFileHandler{rootDir: t.TempDir()},
+		core.HandlerOptions{Version: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry, MaxAttempts: 3},
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := runtime.Executor().Register("model.generate", core.EchoHandler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +199,9 @@ func TestModelPreflightIncludesToolContinuation(t *testing.T) {
 		{name: "model_tools", actionType: "model.generate", complete: true, output: map[string]any{"tool_calls": []any{map[string]any{"id": "call-1"}}}, want: true},
 		{name: "final_text", actionType: "model.generate", complete: true, output: map[string]any{"message": "完成"}},
 		{name: "model_failure", actionType: "model.generate", complete: true, failed: true},
+		{name: "pending_write_file", actionType: writeFileActionType, want: true},
+		{name: "write_file_success", actionType: writeFileActionType, complete: true, output: map[string]any{"path": "a.txt"}, want: true},
+		{name: "write_file_failure", actionType: writeFileActionType, complete: true, failed: true, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime, session, _, record := agentStatusFixture(t, test.actionType)
@@ -312,5 +322,59 @@ func TestMissingModelConfigLeavesPendingToolUnchanged(t *testing.T) {
 	if err != nil || after.Agent.StateVersion != before.Agent.StateVersion || !reflect.DeepEqual(after.Agent.State, before.Agent.State) ||
 		len(after.Actions) != 1 || after.Actions[0].Action.AttemptCount != 0 || after.Actions[0].Action.Status != domain.ActionStatusPending {
 		t.Fatalf("缺配置改变了已保存工具或状态: %+v %v", after, err)
+	}
+}
+
+func TestToolResultPreflightAfterRestartRequiresModel(t *testing.T) {
+	ctx := context.Background()
+	backend := &agentStatusTestBackend{RecoveryStore: core.NewMemoryRecoveryStore()}
+	prepared, err := core.OpenRuntime(ctx, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.Executor().RegisterWithOptions(
+		writeFileActionType, writeFileHandler{rootDir: t.TempDir()},
+		core.HandlerOptions{Version: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry, MaxAttempts: 3},
+	); err != nil {
+		t.Fatal(err)
+	}
+	definition := domain.DefinitionRef{ID: "main", Version: "1"}
+	if err := prepared.RegisterDefinition(definition, agentStatusTestRunner(func(input core.ExecutionContext) (core.ExecutionResult, error) {
+		action := domain.NewAction(writeFileActionType, map[string]any{"path": "a.txt", "content": "x"})
+		return core.ExecutionResult{StateUpdate: map[string]any{
+			"request_status": "waiting", "waiting_action_id": string(action.ID), "waiting_action_type": writeFileActionType,
+			"request_execution_id": string(input.ExecutionID), "waiting_execution_id": string(input.ExecutionID),
+		}, Actions: []domain.Action{action}}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := prepared.CreateAgent("main", definition, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepared.Process(agent.ID, domain.NewEvent("fixture.start", nil)); err != nil {
+		t.Fatal(err)
+	}
+	query, err := prepared.QueryAgent(agent.ID)
+	if err != nil || len(query.Actions) != 1 {
+		t.Fatalf("无法建立工具action fixture: %+v %v", query, err)
+	}
+	// 工具结果落库后关闭runtime，模拟进程重启。
+	agentStatusCompleteFixture(t, backend.session, query.Actions[0].Action, false, map[string]any{"path": "a.txt"})
+	if err := prepared.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	missingConfig := chatTestConfig(t, "https://example.com")
+	missingConfig = filepath.Join(filepath.Dir(missingConfig), "missing.env")
+	var stdout, stderr bytes.Buffer
+	args := []string{"run", "--data-dir", "test-memory", "--env-file", missingConfig, "--json", "--python", "/missing-python"}
+	open := func(context.Context, string) (backendHandle, error) { return backendHandle{Store: backend}, nil }
+	if code := runCommandWithBackend(ctx, args, &stdout, &stderr, open); code != 1 || stdout.Len() != 0 {
+		t.Fatalf("工具结果续轮缺配置没有在执行前失败: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	assertCommandError(t, stderr.Bytes(), "operation", 1)
+	if strings.Contains(stderr.String(), "python") {
+		t.Fatalf("配置预检晚于业务执行，工具结果没有触发模型加载: %s", stderr.String())
 	}
 }
