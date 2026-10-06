@@ -193,6 +193,17 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 		return runner, err
 	}
 	if err := runtime.Executor().RegisterWithOptions(
+		getCurrentDateActionType,
+		getCurrentDateHandler{},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+			MaxAttempts:    3,
+		},
+	); err != nil {
+		return runner, err
+	}
+	if err := runtime.Executor().RegisterWithOptions(
 		readFileActionType,
 		readFileHandler{rootDir: options.python.SourceDir},
 		core.HandlerOptions{

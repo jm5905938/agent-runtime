@@ -62,6 +62,17 @@ func runMainAgent(ctx context.Context, message string, options pythonrunner.Opti
 		return output, err
 	}
 	if err := session.runtime.Executor().RegisterWithOptions(
+		getCurrentDateActionType,
+		getCurrentDateHandler{},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+			MaxAttempts:    3,
+		},
+	); err != nil {
+		return output, err
+	}
+	if err := session.runtime.Executor().RegisterWithOptions(
 		readFileActionType,
 		readFileHandler{rootDir: options.SourceDir},
 		core.HandlerOptions{
