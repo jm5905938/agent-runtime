@@ -228,13 +228,14 @@ class MainAgent:
             raise BusinessError("main没有等待中的操作")
         action_type = state.get("waiting_action_type") or "model.generate"
         execution_id = state.get("waiting_execution_id") or state["request_execution_id"]
+        is_tool = self.tools.supports(action_type)
         if not isinstance(payload, dict) or (
-            action_type != "model.generate"
+            (not is_tool and action_type != "model.generate")
             or payload.get("action_id") != state["waiting_action_id"]
             or payload.get("execution_id") != execution_id
             or payload.get("action_type") != action_type
         ):
-            raise BusinessError("action.resolution与main等待中的模型操作不匹配")
+            raise BusinessError("action.resolution与main等待中的操作不匹配")
         decision = payload.get("decision")
         if decision not in ("retry", "abandon"):
             raise BusinessError("action.resolution需要retry或abandon决定")
@@ -252,6 +253,17 @@ class MainAgent:
             update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
         if decision == "abandon":
             return self._finish(context, update, error="用户放弃本轮: " + reason)
+        if is_tool:
+            retry = self.tools.create_action(update["pending_tool_calls"][0], context)
+            update.update(
+                waiting_action_id=retry.id,
+                waiting_action_type=retry.type,
+                waiting_execution_id=context.execution_id,
+                result_event_id=None,
+                result=None,
+                error=None,
+            )
+            return ExecutionResult(state_update=deepcopy(update), actions=[retry])
         retry_payload = payload.get("retry_payload")
         messages = retry_payload.get("messages") if isinstance(retry_payload, dict) else None
         if not isinstance(messages, list) or not messages:

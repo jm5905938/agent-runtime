@@ -17,7 +17,7 @@ def _prepare(arguments: JSONObject, context: ExecutionContext) -> JSONObject:
 
 READ_FILE = Tool(
     name="read_file",
-    description="读取项目源码目录中的UTF-8文本文件。",
+    description="读取项目源码目录中的UTF-8文本文件；文件最大6KiB。",
     parameters={
         "type": "object",
         "properties": {

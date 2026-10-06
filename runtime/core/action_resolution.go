@@ -66,8 +66,8 @@ func (r *Runtime) ResolveAction(ctx context.Context, actionID domain.ID, decisio
 	if action.Request.ExecutionID == nil {
 		return ActionResolutionReceipt{}, fmt.Errorf("action缺少来源execution: %w", ErrStoreConflict)
 	}
-	if action.Status != domain.ActionStatusUnknown || action.RecoveryPolicy != domain.RecoveryPolicyManual || action.Request.Type != "model.generate" {
-		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的model.generate: %w", ErrStoreConflict)
+	if action.Status != domain.ActionStatusUnknown || action.RecoveryPolicy != domain.RecoveryPolicyManual {
+		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的action: %w", ErrStoreConflict)
 	}
 	agent, err := r.store.LoadAgent(ctx, action.AgentID)
 	if err != nil {
@@ -157,7 +157,7 @@ func (r *Runtime) existingResolution(ctx context.Context, agentID domain.ID, eve
 }
 
 func resolutionFromEvent(action domain.ActionRecord, event domain.Event) *ActionResolution {
-	if action.Request.ExecutionID == nil || action.Status != domain.ActionStatusUnknown || action.RecoveryPolicy != domain.RecoveryPolicyManual || action.Request.Type != "model.generate" ||
+	if action.Request.ExecutionID == nil || action.Status != domain.ActionStatusUnknown || action.RecoveryPolicy != domain.RecoveryPolicyManual ||
 		event.ID != actionResolutionEventID(action.Request.ID) || event.Type != ActionResolutionEventType ||
 		event.Payload["action_id"] != string(action.Request.ID) || event.Payload["action_type"] != action.Request.Type ||
 		event.Payload["execution_id"] != string(*action.Request.ExecutionID) {

@@ -109,7 +109,7 @@ func waitingResultMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery)
 }
 
 func waitingResolutionMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {
-	return delivery.Event.Type == core.ActionResolutionEventType && delivery.Event.Payload["action_type"] == "model.generate" &&
+	return delivery.Event.Type == core.ActionResolutionEventType &&
 		waitingActionMatches(agent, delivery)
 }
 

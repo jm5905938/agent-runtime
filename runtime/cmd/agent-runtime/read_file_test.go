@@ -75,7 +75,7 @@ func TestReadFileHandlerRejectsOversizedAndInvalidUTF8(t *testing.T) {
 	if _, err := handler.Execute(domain.NewAction(
 		readFileActionType,
 		map[string]any{"path": "large.txt"},
-	)); err == nil || !strings.Contains(err.Error(), "超过64KiB") {
+	)); err == nil || !strings.Contains(err.Error(), "超过6KiB") {
 		t.Fatalf("超大文件未正确拒绝: %v", err)
 	}
 
@@ -92,5 +92,49 @@ func TestReadFileHandlerRejectsOversizedAndInvalidUTF8(t *testing.T) {
 		map[string]any{"path": "invalid.txt"},
 	)); err == nil || !strings.Contains(err.Error(), "有效UTF-8") {
 		t.Fatalf("非法UTF-8文件未正确拒绝: %v", err)
+	}
+}
+
+func TestReadFileHandlerAcceptsFullSizePlainText(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(
+		filepath.Join(root, "plain.txt"),
+		[]byte(strings.Repeat("x", maxReadFileBytes)),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (readFileHandler{rootDir: root}).Execute(domain.NewAction(
+		readFileActionType,
+		map[string]any{"path": "plain.txt"},
+	))
+	if err != nil {
+		t.Fatalf("上限内的纯文本被误拒: %v", err)
+	}
+	content, _ := result["content"].(string)
+	if len(content) != maxReadFileBytes {
+		t.Fatalf("内容长度错误: %d", len(content))
+	}
+}
+
+func TestReadFileHandlerRejectsEscapedResultOverBudget(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(
+		filepath.Join(root, "escaped.txt"),
+		[]byte(strings.Repeat("<", maxReadFileBytes)),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (readFileHandler{rootDir: root}).Execute(domain.NewAction(
+		readFileActionType,
+		map[string]any{"path": "escaped.txt"},
+	))
+	if err == nil || !strings.Contains(err.Error(), "8KiB") {
+		t.Fatalf("编码后超预算未被拒绝: %v", err)
 	}
 }

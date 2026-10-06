@@ -50,3 +50,20 @@ func TestWriteFileHandlerRejectsExistingFile(t *testing.T) {
 		t.Fatalf("已有文件未被拒绝: %v", err)
 	}
 }
+
+func TestWriteFileHandlerRejectsOversizedContent(t *testing.T) {
+	root := t.TempDir()
+
+	_, err := (writeFileHandler{rootDir: root}).Execute(
+		domain.NewAction(writeFileActionType, map[string]any{
+			"path":    "notes.txt",
+			"content": strings.Repeat("x", maxWriteFileBytes+1),
+		}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "超过4KiB") {
+		t.Fatalf("超限内容未被拒绝: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "notes.txt")); !os.IsNotExist(statErr) {
+		t.Fatal("被拒绝的写入仍然创建了文件")
+	}
+}

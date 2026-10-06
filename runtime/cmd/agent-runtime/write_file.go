@@ -13,7 +13,7 @@ import (
 
 const (
 	writeFileActionType = "tool.write_file"
-	maxWriteFileBytes   = 64 * 1024
+	maxWriteFileBytes   = 4 * 1024
 )
 
 type writeFileHandler struct {
@@ -36,7 +36,7 @@ func (handler writeFileHandler) Execute(action domain.Action) (map[string]any, e
 
 	contentBytes := []byte(content)
 	if len(contentBytes) > maxWriteFileBytes {
-		return nil, errors.New("write_file内容超过64KiB")
+		return nil, errors.New("write_file内容超过4KiB")
 	}
 	if !utf8.Valid(contentBytes) {
 		return nil, errors.New("write_file内容不是有效UTF-8")

@@ -192,7 +192,6 @@ func TestActionResolutionRequiresCurrentUnknownManualMainModel(t *testing.T) {
 		{name: "succeeded", options: resolutionTestOptions{status: domain.ActionStatusSucceeded}},
 		{name: "failed", options: resolutionTestOptions{status: domain.ActionStatusFailed}},
 		{name: "safe retry policy", options: resolutionTestOptions{policy: domain.RecoveryPolicySafeRetry}},
-		{name: "tool action", options: resolutionTestOptions{actionType: "tool.clock"}},
 		{name: "other definition", options: resolutionTestOptions{definition: domain.DefinitionRef{ID: "echo", Version: "1"}}},
 		{name: "other definition version", options: resolutionTestOptions{definition: domain.DefinitionRef{ID: "main", Version: "2"}}},
 		{name: "not waiting", state: map[string]any{"request_status": "finished"}},
@@ -236,6 +235,39 @@ func TestActionResolutionAcceptsLegacyWaitingStateAndUnicodeReason(t *testing.T)
 	receipt, err := fixture.runtime.ResolveAction(context.Background(), fixture.action.Request.ID, ResolutionRetry, reason)
 	if err != nil || receipt.Duplicate || receipt.Resolution.Reason != reason || receipt.Delivery.Status != domain.DeliveryStatusPending {
 		t.Fatalf("legacy waiting state rejected: receipt=%+v error=%v", receipt, err)
+	}
+}
+
+func TestActionResolutionAcceptsUnknownManualToolAction(t *testing.T) {
+	fixture := newResolutionTestFixture(t, resolutionTestOptions{actionType: "tool.clock"})
+	before, err := fixture.store.LoadAction(context.Background(), fixture.action.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, err := fixture.runtime.ResolveAction(
+		context.Background(), fixture.action.Request.ID, ResolutionRetry, "重试工具调用")
+	if err != nil || receipt.Duplicate || receipt.Resolution.ActionID != fixture.action.Request.ID ||
+		receipt.Resolution.Decision != ResolutionRetry || receipt.Delivery.Status != domain.DeliveryStatusPending {
+		t.Fatalf("unknown manual tool action rejected: receipt=%+v error=%v", receipt, err)
+	}
+
+	event, err := fixture.store.LoadEvent(context.Background(), receipt.Resolution.EventID)
+	if err != nil || event.Payload["action_type"] != "tool.clock" ||
+		event.Payload["decision"] != string(ResolutionRetry) {
+		t.Fatalf("resolution event not generic: payload=%+v error=%v", event.Payload, err)
+	}
+
+	saved, err := fixture.store.LoadAction(context.Background(), fixture.action.Request.ID)
+	if err != nil || !reflect.DeepEqual(saved, before) || fixture.calls.Load() != 0 {
+		t.Fatalf("resolution executed or changed the tool action: saved=%+v calls=%d error=%v",
+			saved, fixture.calls.Load(), err)
+	}
+
+	query := queryAgent(t, fixture.runtime, fixture.agent.ID)
+	if len(query.Actions) != 1 || query.Actions[0].Resolution == nil ||
+		query.Actions[0].Resolution.Decision != ResolutionRetry {
+		t.Fatalf("tool resolution not exposed in query: %+v", query.Actions)
 	}
 }
 

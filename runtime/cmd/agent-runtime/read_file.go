@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,8 +14,9 @@ import (
 )
 
 const (
-	readFileActionType = "tool.read_file"
-	maxReadFileBytes   = 64 * 1024
+	readFileActionType     = "tool.read_file"
+	maxReadFileBytes       = 6 * 1024
+	maxReadFileResultBytes = 8 * 1024
 )
 
 type readFileHandler struct {
@@ -70,7 +72,7 @@ func (handler readFileHandler) Execute(action domain.Action) (map[string]any, er
 		return nil, errors.New("read_file不能读取目录")
 	}
 	if info.Size() > maxReadFileBytes {
-		return nil, errors.New("read_file文件超过64KiB")
+		return nil, errors.New("read_file文件超过6KiB")
 	}
 
 	file, err := os.Open(resolved)
@@ -84,15 +86,20 @@ func (handler readFileHandler) Execute(action domain.Action) (map[string]any, er
 		return nil, fmt.Errorf("read_file读取失败: %w", err)
 	}
 	if len(content) > maxReadFileBytes {
-		return nil, errors.New("read_file文件超过64KiB")
+		return nil, errors.New("read_file文件超过6KiB")
 	}
 
 	if !utf8.Valid(content) {
 		return nil, errors.New("read_file只支持有效UTF-8文本")
 	}
 
-	return map[string]any{
+	result := map[string]any{
 		"path":    filepath.ToSlash(relative),
 		"content": string(content),
-	}, nil
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || len(encoded) > maxReadFileResultBytes {
+		return nil, errors.New("read_file结果编码后超过8KiB")
+	}
+	return result, nil
 }
