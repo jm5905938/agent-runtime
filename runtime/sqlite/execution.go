@@ -718,7 +718,7 @@ func (s *Session) CommitExecution(
 			string(requestJSON),
 			action.HandlerVersion,
 			string(action.RecoveryPolicy),
-			action.IdempotencyKey,
+			string(action.Request.ID),
 			strconv.FormatUint(action.MaxAttempts, 10),
 			string(domain.ActionStatusPending),
 			"0",

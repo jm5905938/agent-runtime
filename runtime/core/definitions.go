@@ -5,7 +5,6 @@ import (
 	"agent-runtime/domain"
 	"context"
 	"fmt"
-	"reflect"
 )
 
 // agent定义
@@ -22,7 +21,7 @@ func (r *Runtime) RegisterDefinition(ref domain.DefinitionRef, runner AgentRunne
 	if _, err := codec.Encode(ref); err != nil {
 		return fmt.Errorf("definition记录: %w", err)
 	}
-	if nilRunner(runner) {
+	if isNilValue(runner) {
 		return fmt.Errorf("注册definition出错: runner不能为空")
 	}
 	r.mu.Lock()
@@ -90,16 +89,4 @@ func (r *Runtime) bindingError(ref domain.DefinitionRef) error {
 		return fmt.Errorf("%w: 缺少definition绑定%s@%s", ErrAgentUnavailable, ref.ID, ref.Version)
 	}
 	return nil
-}
-
-func nilRunner(runner AgentRunner) bool {
-	if runner == nil {
-		return true
-	}
-	v := reflect.ValueOf(runner)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
 }

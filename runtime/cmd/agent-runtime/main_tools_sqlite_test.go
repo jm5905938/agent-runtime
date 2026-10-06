@@ -368,9 +368,11 @@ func TestMainToolsSQLiteCommandsAcrossProcesses(t *testing.T) {
 				config := chatTestConfig(t, server.URL)
 				missingConfig := filepath.Join(t.TempDir(), "missing.env")
 				before, _ := p.call(t, directory, 0, "status", "--agent", agentID)
-				if before.Query.Agent.State["request_status"] != "waiting" || before.Query.Agent.State["pending_message"] != "恢复工具查询" {
+				pending, _ := before.Query.Agent.State["pending_messages"].([]any)
+				if before.Query.Agent.State["request_status"] != "waiting" || len(pending) == 0 {
 					t.Fatalf("fixture未保存真实等待状态: %+v", before.Query)
 				}
+				mainToolsAssertJSON(t, pending[0], map[string]any{"role": "user", "content": "恢复工具查询"})
 				if boundary != "saved_final_text" {
 					_, stderr := p.call(t, directory, 1, "run", "--env-file", missingConfig)
 					assertCommandError(t, stderr, "operation", 1)
@@ -490,7 +492,7 @@ func mainToolsSQLiteCommitExecution(t *testing.T, p sqliteCommandProcess, direct
 	action.BindExecution(claim.Token.ExecutionID)
 	record := domain.ActionRecord{
 		Request: action, AgentID: agentID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicyManual,
-		IdempotencyKey: string(action.ID), MaxAttempts: 1, Status: domain.ActionStatusPending,
+		MaxAttempts: 1, Status: domain.ActionStatusPending,
 		ResultEventID: domain.NewEvent("action.result", nil).ID,
 	}
 	if action.Type == "tool.agent_status" {

@@ -293,7 +293,7 @@ func TestSQLiteClaimProcess(t *testing.T) {
 		action := domain.NewAction("echo", claim.Event.Payload)
 		action.BindExecution(claim.Token.ExecutionID)
 		record := domain.ActionRecord{Request: action, AgentID: claim.Agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-			IdempotencyKey: string(action.ID), MaxAttempts: 3, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID}
+			MaxAttempts: 3, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID}
 		_, err = s.CommitExecution(ctx, core.ExecutionCommit{Token: claim.Token, Actions: []domain.ActionRecord{record}, StateUpdate: map[string]any{
 			"request_status": "waiting", "request_event_id": string(claim.Event.ID), "request_execution_id": string(claim.Token.ExecutionID), "waiting_action_id": string(action.ID),
 		}})

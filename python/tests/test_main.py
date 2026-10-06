@@ -59,7 +59,8 @@ class MainTests(unittest.TestCase):
         first = initial_state()
         second = initial_state()
         self.assertEqual(first["messages"], [])
-        self.assertIsNone(first["pending_message"])
+        self.assertEqual(first["pending_messages"], [])
+        self.assertNotIn("pending_message", first)
         first["messages"].append({"role": "user", "content": "first"})
         self.assertEqual(second["messages"], [])
 
@@ -78,7 +79,8 @@ class MainTests(unittest.TestCase):
         self.assertEqual(waiting["request_execution_id"], "execution-1")
         self.assertEqual(waiting["waiting_action_id"], action.id)
         self.assertEqual(waiting["messages"], [])
-        self.assertEqual(waiting["pending_message"], "你好\n🌍")
+        self.assertEqual(waiting["pending_messages"][0]["content"], "你好\n🌍")
+        self.assertNotIn("pending_message", waiting)
         saved = deepcopy(waiting)
         result = self.agent.run(self.result_context(waiting, result={"message": "模型回答"}))
         self.assertEqual(waiting, saved)
@@ -94,7 +96,8 @@ class MainTests(unittest.TestCase):
             {"role": "user", "content": "你好\n🌍"},
             {"role": "assistant", "content": "模型回答"},
         ])
-        self.assertIsNone(final["pending_message"])
+        self.assertEqual(final["pending_messages"], [])
+        self.assertNotIn("pending_message", final)
 
     def test_next_request_uses_completed_history_after_state_round_trip(self):
         waiting, _ = self.waiting("first")
@@ -109,7 +112,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(state, saved)
         self.assertEqual(output.actions[0].payload, {"messages": history + [{"role": "user", "content": "second"}], "tools": default_tools().definitions()})
         self.assertEqual(output.state_update["messages"], history)
-        self.assertEqual(output.state_update["pending_message"], "second")
+        self.assertEqual(output.state_update["pending_messages"][0]["content"], "second")
         self.assertEqual(set(output.state_update), set(initial_state()))
         self.assertIsNone(output.state_update["result"])
         self.assertIsNone(output.state_update["result_event_id"])
@@ -120,7 +123,7 @@ class MainTests(unittest.TestCase):
             {"role": "user", "content": "second"},
             {"role": "assistant", "content": "second reply"},
         ])
-        self.assertIsNone(final["pending_message"])
+        self.assertEqual(final["pending_messages"], [])
 
     def test_request_history_and_action_are_independent_snapshots(self):
         history = [
@@ -200,7 +203,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(final["result_event_id"], "result-1")
         self.assertEqual(output.actions, [])
         self.assertEqual(final["messages"], history)
-        self.assertIsNone(final["pending_message"])
+        self.assertEqual(final["pending_messages"], [])
         next_result = self.agent.run(context(final, event_id="request-2"))
         self.assertEqual(next_result.state_update["request_status"], "waiting")
         self.assertIsNone(next_result.state_update["error"])
@@ -232,7 +235,7 @@ class MainTests(unittest.TestCase):
             state = request.state_update | result.state_update
             complete_history.extend((user, assistant))
             self.assertEqual(state["messages"], complete_history[-MAX_HISTORY_TURNS * 2:])
-            self.assertIsNone(state["pending_message"])
+            self.assertEqual(state["pending_messages"], [])
 
     def test_history_byte_limit_counts_utf8_and_go_json_escaping(self):
         state = initial_state()
@@ -263,7 +266,7 @@ class MainTests(unittest.TestCase):
         final = state | result.state_update
         self.assertEqual(final["messages"], [])
         self.assertEqual(final["result"], answer)
-        self.assertIsNone(final["pending_message"])
+        self.assertEqual(final["pending_messages"], [])
         next_request = self.agent.run(context(final, payload={"message": "next"}))
         self.assertEqual(next_request.actions[0].payload["messages"], [{"role": "user", "content": "next"}])
 
@@ -277,7 +280,7 @@ class MainTests(unittest.TestCase):
                 saved = deepcopy(state)
                 request = self.agent.run(context(state, payload={"message": message}))
                 self.assertEqual(request.actions[0].payload["messages"], [{"role": "user", "content": message}])
-                self.assertEqual(request.state_update["pending_message"], message)
+                self.assertEqual(request.state_update["pending_messages"][0]["content"], message)
                 with self.assertRaises(BusinessError):
                     self.agent.run(context(state, payload={"message": message + "a"}))
                 self.assertEqual(state, saved)
@@ -285,12 +288,11 @@ class MainTests(unittest.TestCase):
     def test_legacy_completed_state_starts_with_empty_history(self):
         state = initial_state() | {"request_status": "succeeded", "result": "old reply"}
         del state["messages"]
-        del state["pending_message"]
         saved = deepcopy(state)
         request = self.agent.run(context(state, payload={"message": "new request"}))
         self.assertEqual(state, saved)
         self.assertEqual(request.state_update["messages"], [])
-        self.assertEqual(request.state_update["pending_message"], "new request")
+        self.assertEqual(request.state_update["pending_messages"][0]["content"], "new request")
         self.assertEqual(request.actions[0].payload["messages"], [{"role": "user", "content": "new request"}])
 
     def test_legacy_waiting_result_finishes_without_inventing_history(self):
@@ -298,13 +300,12 @@ class MainTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 state, _ = self.waiting("unavailable legacy user message")
                 del state["messages"]
-                del state["pending_message"]
                 saved = deepcopy(state)
                 result = self.agent.run(self.result_context(state, **changes))
                 self.assertEqual(state, saved)
                 final = state | result.state_update
                 self.assertEqual(final["messages"], [])
-                self.assertIsNone(final["pending_message"])
+                self.assertEqual(final["pending_messages"], [])
                 self.assertEqual(final["request_status"], changes.get("status", "succeeded"))
                 next_request = self.agent.run(context(final, payload={"message": "next"}))
                 self.assertEqual(next_request.actions[0].payload["messages"], [{"role": "user", "content": "next"}])
@@ -345,19 +346,48 @@ class MainTests(unittest.TestCase):
                     self.agent.run(context(state))
                 self.assertEqual(state, saved)
 
-    def test_new_waiting_state_requires_pending_message(self):
-        for pending in (None, 42, True, []):
+    def test_new_waiting_state_requires_pending_messages(self):
+        for pending in (None, 42, True, [], [{"role": "user", "content": None}]):
             with self.subTest(pending=pending):
                 state, _ = self.waiting()
-                state["pending_message"] = pending
+                state["pending_messages"] = pending
                 saved = deepcopy(state)
-                with self.assertRaisesRegex(ValueError, "pending_message"):
+                with self.assertRaisesRegex(ValueError, "messages"):
                     self.agent.run(self.result_context(state))
                 self.assertEqual(state, saved)
         state, _ = self.waiting()
-        del state["pending_message"]
-        with self.assertRaisesRegex(ValueError, "pending_message"):
+        del state["pending_messages"]
+        with self.assertRaisesRegex(ValueError, "pending_messages"):
             self.agent.run(self.result_context(state))
+
+    def test_legacy_pending_message_is_cleared_when_state_updates_are_merged(self):
+        for old_format in ("single", "both"):
+            with self.subTest(old_format=old_format):
+                state, _ = self.waiting("旧输入")
+                state["pending_message"] = "旧输入"
+                if old_format == "single":
+                    for key in ("pending_messages", "pending_tool_calls", "tool_rounds", "waiting_action_type", "waiting_execution_id"):
+                        del state[key]
+                saved = deepcopy(state)
+                output = self.agent.run(self.result_context(state))
+                self.assertEqual(state, saved)
+                restored = json.loads(json.dumps(state | output.state_update))
+                self.assertIsNone(restored["pending_message"])
+                self.assertEqual(restored["messages"], [
+                    {"role": "user", "content": "旧输入"},
+                    {"role": "assistant", "content": "reply"},
+                ])
+                next_output = self.agent.run(context(restored, payload={"message": "新输入"}))
+                self.assertIsNone(next_output.state_update["pending_message"])
+                self.assertEqual(next_output.state_update["pending_messages"], [{"role": "user", "content": "新输入"}])
+
+    def test_legacy_duplicate_message_mismatch_is_rejected(self):
+        state, _ = self.waiting("当前输入")
+        state["pending_message"] = "另一条输入"
+        saved = deepcopy(state)
+        with self.assertRaisesRegex(ValueError, "pending_messages"):
+            self.agent.run(self.result_context(state))
+        self.assertEqual(state, saved)
 
     def test_worker_registers_main_and_echo(self):
         main = context()

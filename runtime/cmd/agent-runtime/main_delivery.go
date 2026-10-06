@@ -39,7 +39,3 @@ func (runner mainAgentRunner) DeliveryBlockedBy(agent core.AgentSnapshot, event 
 	}
 	return nil
 }
-
-func registerMain(runtime *core.Runtime, runner core.AgentRunner) error {
-	return runtime.RegisterDefinition(domain.DefinitionRef{ID: "main", Version: "1"}, mainAgentRunner{AgentRunner: runner})
-}

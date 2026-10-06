@@ -55,7 +55,7 @@ func TestRecoverySnapshotCodecRoundTrip(t *testing.T) {
 		},
 		Action: domain.ActionRecord{
 			Request: action, AgentID: "agent-1", HandlerVersion: "v1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-			IdempotencyKey: "echo-action-1", MaxAttempts: 3, Status: domain.ActionStatusSucceeded, AttemptCount: 2,
+			MaxAttempts: 3, Status: domain.ActionStatusSucceeded, AttemptCount: 2,
 			ResultEventID: "result-event-1",
 			Result:        &domain.ActionResult{ActionID: "action-1", EventID: "result-event-1", Status: domain.ActionStatusSucceeded, Output: data},
 		},

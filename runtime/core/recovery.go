@@ -283,7 +283,7 @@ func validateRecoveryAction(s *MemoryStore, action domain.ActionRecord, ids map[
 			return recoveryConflict("已完成的action", id)
 		}
 		completion := ActionCompletion{Token: ActionToken{ActionID: id, AttemptNumber: action.AttemptCount}, Result: *action.Result, Event: event}
-		if err := validateActionCompletion(action, completion); err != nil {
+		if err := ValidateActionCompletion(action, completion); err != nil {
 			return recoveryConflict("action结果", id)
 		}
 	default:

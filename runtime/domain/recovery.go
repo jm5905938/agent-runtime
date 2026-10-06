@@ -77,7 +77,6 @@ type ActionRecord struct {
 	AgentID        ID             `json:"agent_id"`
 	HandlerVersion string         `json:"handler_version"`
 	RecoveryPolicy RecoveryPolicy `json:"recovery_policy"`
-	IdempotencyKey string         `json:"idempotency_key"`
 	MaxAttempts    uint64         `json:"max_attempts"`
 	Status         ActionStatus   `json:"status"`
 	AttemptCount   uint64         `json:"attempt_count"`

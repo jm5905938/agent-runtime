@@ -39,7 +39,7 @@ func recoveryFixture(t *testing.T) (*Backend, *Session, *core.ExecutionClaim, do
 	request := domain.NewAction("echo", nil)
 	request.BindExecution(source.Token.ExecutionID)
 	action := domain.ActionRecord{Request: request, AgentID: agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-		IdempotencyKey: string(request.ID), MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID}
+		MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID}
 	if _, err := s.CommitExecution(ctx, core.ExecutionCommit{Token: source.Token, Actions: []domain.ActionRecord{action}}); err != nil {
 		t.Fatal(err)
 	}

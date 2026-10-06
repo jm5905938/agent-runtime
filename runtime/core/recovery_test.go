@@ -189,7 +189,7 @@ func TestMemoryRecoveryRestoresAttemptsAndRejectsOldTokens(t *testing.T) {
 				t.Fatalf("new execution = %+v, %v", newClaim, err)
 			}
 			newAction, err := session.ClaimAction(ctx, action.Request.ID)
-			if err != nil || newAction.Token.AttemptNumber != 2 || newAction.Record.IdempotencyKey != action.IdempotencyKey || newAction.Record.ResultEventID != action.ResultEventID {
+			if err != nil || newAction.Token.AttemptNumber != 2 || newAction.Record.Request.ID != action.Request.ID || newAction.Record.ResultEventID != action.ResultEventID {
 				t.Fatalf("new action = %+v, %v", newAction, err)
 			}
 		}

@@ -180,7 +180,7 @@ func mainResolutionSQLiteCommitDecision(t *testing.T, p sqliteCommandProcess, di
 		action.BindExecution(claim.Token.ExecutionID)
 		records = append(records, domain.ActionRecord{
 			Request: action, AgentID: agentID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicyManual,
-			IdempotencyKey: string(action.ID), MaxAttempts: 1, Status: domain.ActionStatusPending,
+			MaxAttempts: 1, Status: domain.ActionStatusPending,
 			ResultEventID: domain.NewEvent("action.result", nil).ID,
 		})
 	}
@@ -586,7 +586,7 @@ func TestMainResolutionSQLiteCommandsAcrossProcesses(t *testing.T) {
 			t.Fatalf("工具续轮人工重试未生成单个模型调用: %+v", retries)
 		}
 		restarted, _ := p.call(t, directory, 0, "status", "--agent", agentID)
-		for _, field := range []string{"messages", "pending_messages", "pending_tool_calls", "pending_message", "tool_rounds", "request_event_id", "request_execution_id"} {
+		for _, field := range []string{"messages", "pending_messages", "pending_tool_calls", "tool_rounds", "request_event_id", "request_execution_id"} {
 			mainToolsAssertJSON(t, restarted.Query.Agent.State[field], before.Query.Agent.State[field])
 		}
 		mainToolsAssertJSON(t, retries[0].Request.Payload["messages"], continuation.Request.Payload["messages"])

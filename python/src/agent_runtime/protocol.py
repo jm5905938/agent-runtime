@@ -75,9 +75,14 @@ def _encode(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
-def encode_frame(value: object) -> bytes:
+def json_text(value: object) -> str:
+    """保留协议中的无损Decimal数字。"""
     validate_json(value)
-    frame = (_encode(value) + "\n").encode("utf-8")
+    return _encode(value)
+
+
+def encode_frame(value: object) -> bytes:
+    frame = (json_text(value) + "\n").encode("utf-8")
     if len(frame) > MAX_FRAME_BYTES:
         raise ProtocolError("响应超过最大帧长度")
     return frame

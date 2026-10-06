@@ -2,38 +2,17 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
-from decimal import Decimal
-import json
 import os
 import re
 import sys
 
 from .agent import JSONObject
-from .protocol import validate_json
+from .protocol import json_text
 
 
 DEFAULT_MAX_PROMPT_CHARS = 100_000
 MAX_PROMPT_BYTES = 384 * 1024
 MAX_SYSTEM_PROMPT_BYTES = 64 * 1024
-
-
-def json_text(value: object) -> str:
-    """保留协议中的无损Decimal数字。"""
-    validate_json(value)
-
-    def encode(item):
-        if isinstance(item, Decimal):
-            return str(item)
-        if isinstance(item, dict):
-            return "{" + ",".join(
-                json.dumps(key, ensure_ascii=False) + ":" + encode(child)
-                for key, child in item.items()
-            ) + "}"
-        if isinstance(item, list):
-            return "[" + ",".join(encode(child) for child in item) + "]"
-        return json.dumps(item, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-    return encode(value)
 
 
 def json_size(value: object) -> int:

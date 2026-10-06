@@ -122,13 +122,13 @@ func loadRecoveryRecords(ctx context.Context, tx *sql.Tx) (core.RecoveryRecords,
 			records.Attempts = append(records.Attempts, attempt)
 			return nil
 		}},
-		{`SELECT id, execution_id, agent_id, request_json, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
+		{`SELECT id, execution_id, agent_id, request_json, handler_version, recovery_policy, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
 		 FROM actions ORDER BY sequence`, func(rows *sql.Rows) error {
 			var action domain.ActionRecord
 			var id, executionID domain.ID
 			var request, max, count string
 			var result, failure sql.NullString
-			if err := rows.Scan(&id, &executionID, &action.AgentID, &request, &action.HandlerVersion, &action.RecoveryPolicy, &action.IdempotencyKey, &max, &action.Status, &count, &action.ResultEventID, &result, &failure); err != nil {
+			if err := rows.Scan(&id, &executionID, &action.AgentID, &request, &action.HandlerVersion, &action.RecoveryPolicy, &max, &action.Status, &count, &action.ResultEventID, &result, &failure); err != nil {
 				return err
 			}
 			if err := codec.Decode([]byte(request), &action.Request); err != nil {

@@ -44,7 +44,7 @@ func NewRuntime() *Runtime {
 }
 
 func NewRuntimeWithStore(store StateStore) (*Runtime, error) {
-	if store == nil || isNilValue(store) {
+	if isNilValue(store) {
 		return nil, fmt.Errorf("创建runtime: store不能为空")
 	}
 	if _, session := store.(RecoverySession); session {
@@ -63,6 +63,9 @@ func newRuntime(store StateStore) *Runtime {
 }
 
 func isNilValue(value any) bool {
+	if value == nil {
+		return true
+	}
 	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
@@ -81,7 +84,7 @@ func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) erro
 		return err
 	}
 	defer done()
-	if agent == nil || nilRunner(runner) {
+	if agent == nil || isNilValue(runner) {
 		return fmt.Errorf("注册agent: agent和runner不能为空")
 	}
 	r.mu.Lock()

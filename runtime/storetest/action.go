@@ -113,7 +113,7 @@ func testActionUnknown(t *testing.T, backend core.RecoveryStore, policy domain.R
 	}
 	must(t, err)
 	if second.Token.AttemptNumber != 2 || second.Record.Request.ID != action.Request.ID ||
-		second.Record.ResultEventID != action.ResultEventID || second.Record.IdempotencyKey != action.IdempotencyKey ||
+		second.Record.ResultEventID != action.ResultEventID ||
 		second.Record.HandlerVersion != action.HandlerVersion || second.Record.RecoveryPolicy != policy || second.Record.MaxAttempts != action.MaxAttempts {
 		t.Fatalf("safe_retry改变固定元数据: %+v", second)
 	}

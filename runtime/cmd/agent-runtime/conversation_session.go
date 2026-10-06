@@ -7,11 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -26,13 +24,11 @@ func defaultDataDir() string {
 
 // 每次操作只持有一个短会话；读取下一条用户输入时释放存储所有权。
 func withConversation(ctx context.Context, options commandOptions, open backendOpener, create bool, fn func(*core.Runtime, core.AgentSnapshot, func(context.Context) error) error) (err error) {
-	cleanup := &conversationCleanup{}
+	cleanup := &cli.Cleanup{}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if closeErr := cleanup.close(closeCtx); closeErr != nil {
-			err = &conversationCleanupError{cause: errors.Join(err, closeErr), cleanup: cleanup}
-		}
+		err = errors.Join(err, cleanup.Close(closeCtx))
 	}()
 	if open == nil {
 		return cli.ErrBackendUnavailable
@@ -41,7 +37,7 @@ func withConversation(ctx context.Context, options commandOptions, open backendO
 		options.dataDir = defaultDataDir()
 	}
 	backend, err := open(ctx, options.dataDir)
-	cleanup.backend = backend.Close
+	cleanup.Backend = backend.Close
 	if err != nil {
 		return err
 	}
@@ -49,12 +45,12 @@ func withConversation(ctx context.Context, options commandOptions, open backendO
 	if err != nil {
 		var pending *core.RuntimeOpenError
 		if errors.As(err, &pending) {
-			cleanup.runtime = pending
+			cleanup.Runtime = pending
 		}
 		return err
 	}
-	cleanup.runtime = runtime
-	cleanup.binding, err = bindPersistent(ctx, runtime, options)
+	cleanup.Runtime = runtime
+	cleanup.Binding, err = bindPersistent(ctx, runtime, options)
 	if err != nil {
 		return err
 	}
@@ -62,7 +58,7 @@ func withConversation(ctx context.Context, options commandOptions, open backendO
 	if err != nil {
 		return err
 	}
-	preparer, ok := cleanup.binding.(interface{ PrepareModel(context.Context) error })
+	preparer, ok := cleanup.Binding.(interface{ PrepareModel(context.Context) error })
 	if !ok {
 		return errors.New("对话绑定不支持模型配置")
 	}
@@ -123,55 +119,4 @@ func selectConversationAgent(ctx context.Context, runtime *core.Runtime, id doma
 		}
 		return core.AgentSnapshot{}, &cli.UsageError{Message: "存在多个MainAgent：" + strings.Join(names, "、") + "；请使用--agent指定"}
 	}
-}
-
-type conversationCleanupError struct {
-	cause   error
-	cleanup *conversationCleanup
-}
-
-func (e *conversationCleanupError) Error() string { return e.cause.Error() }
-func (e *conversationCleanupError) Unwrap() error { return e.cause }
-func (e *conversationCleanupError) Close(ctx context.Context) error {
-	return e.cleanup.close(ctx)
-}
-
-type conversationCleanup struct {
-	mu      sync.Mutex
-	runtime interface{ Close(context.Context) error }
-	binding io.Closer
-	backend func() error
-}
-
-func (c *conversationCleanup) close(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.runtime != nil {
-		if err := c.runtime.Close(ctx); err != nil {
-			return fmt.Errorf("关闭对话runtime: %w", err)
-		}
-		c.runtime = nil
-	}
-	var result error
-	if c.binding != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := c.binding.Close(); err != nil {
-			result = fmt.Errorf("关闭对话绑定: %w", err)
-		} else {
-			c.binding = nil
-		}
-	}
-	if c.backend != nil {
-		if err := ctx.Err(); err != nil {
-			return errors.Join(result, err)
-		}
-		if err := c.backend(); err != nil {
-			result = errors.Join(result, fmt.Errorf("关闭对话后端: %w", err))
-		} else {
-			c.backend = nil
-		}
-	}
-	return result
 }

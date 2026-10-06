@@ -56,7 +56,7 @@ func TestPrepareActionsFreezesHandlerMetadataWithoutExecution(t *testing.T) {
 	if calls != 0 || record.AgentID != "agent" || *record.Request.ExecutionID != "execution" ||
 		record.Request.ID != action.ID || record.HandlerVersion != "echo-v2" ||
 		record.RecoveryPolicy != domain.RecoveryPolicySafeRetry || record.MaxAttempts != 3 ||
-		record.IdempotencyKey != string(action.ID) || record.ResultEventID == "" ||
+		record.ResultEventID == "" ||
 		record.Status != domain.ActionStatusPending || record.AttemptCount != 0 ||
 		record.Result != nil || record.LastError != nil {
 		t.Fatalf("prepared metadata: calls=%d, record=%+v", calls, record)

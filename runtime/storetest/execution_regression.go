@@ -38,7 +38,6 @@ func testExecutionActionValidation(t *testing.T, backend core.RecoveryStore) {
 		{"initial_error", func(a, _ *domain.ActionRecord) { a.LastError = &domain.Failure{} }},
 		{"empty_handler_version", func(a, _ *domain.ActionRecord) { a.HandlerVersion = " \t" }},
 		{"invalid_recovery_policy", func(a, _ *domain.ActionRecord) { a.RecoveryPolicy = "invalid" }},
-		{"empty_idempotency_key", func(a, _ *domain.ActionRecord) { a.IdempotencyKey = " \t" }},
 		{"zero_attempt_limit", func(a, _ *domain.ActionRecord) { a.MaxAttempts = 0 }},
 		{"empty_result_event_id", func(a, _ *domain.ActionRecord) { a.ResultEventID = "" }},
 		{"invalid_handler_text", func(a, _ *domain.ActionRecord) { a.HandlerVersion = string([]byte{0xff}) }},

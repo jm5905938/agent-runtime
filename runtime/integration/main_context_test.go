@@ -33,7 +33,7 @@ func TestMainToolContinuationFitsWorkerFramesAndPreservesHistoryOnFailure(t *tes
 		Agent: core.AgentSnapshot{
 			ID: "main-frame-budget", Name: "main", Definition: domain.DefinitionRef{ID: "main", Version: "1"},
 			Status: domain.AgentStatusActive, StateVersion: 6,
-			State: map[string]any{"request_status": "succeeded", "messages": history, "pending_message": nil, "result": "previous reply"},
+			State: map[string]any{"request_status": "succeeded", "messages": history, "result": "previous reply"},
 		},
 		Event:       domain.NewEvent("main.request", map[string]any{"message": strings.Repeat("q", 64*1024-2)}),
 		ExecutionID: "request-execution", AttemptID: "request-attempt",
@@ -77,8 +77,11 @@ func TestMainToolContinuationFitsWorkerFramesAndPreservesHistoryOnFailure(t *tes
 		t.Fatalf("large model continuation did not cross the worker protocol: actions=%d err=%v", len(continued.Actions), err)
 	}
 	frame, err := json.Marshal(map[string]any{"version": 1, "id": "continuation-execution-attempt", "result": continued})
-	if err != nil || len(frame)+1 >= 1<<20 || len(frame) < 900*1024 {
+	if err != nil || len(frame)+1 >= 1<<20 || len(frame) < 880*1024 {
 		t.Fatalf("continuation fixture did not exercise a near-limit frame: bytes=%d err=%v", len(frame), err)
+	}
+	if _, exists := continued.StateUpdate["pending_message"]; exists {
+		t.Fatal("模型续轮仍然携带重复的pending_message")
 	}
 	modelInput, err := json.Marshal(continued.Actions[0].Payload["messages"])
 	if err != nil || len(modelInput) > 384*1024 {

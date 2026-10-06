@@ -74,50 +74,55 @@ type Summary struct {
 
 type CleanupError struct {
 	cause   error
-	cleanup *commandCleanup
+	cleanup *Cleanup
 }
 
 func (e *CleanupError) Error() string { return e.cause.Error() }
 func (e *CleanupError) Unwrap() error { return e.cause }
 func (e *CleanupError) Close(ctx context.Context) error {
-	return e.cleanup.close(ctx)
+	return e.cleanup.Close(ctx)
 }
 
-type commandCleanup struct {
+type Cleanup struct {
 	mu      sync.Mutex
-	runtime interface{ Close(context.Context) error }
-	binding io.Closer
-	backend func() error
+	Runtime interface{ Close(context.Context) error }
+	Binding io.Closer
+	Backend func() error
 }
 
-func (c *commandCleanup) close(ctx context.Context) error {
+func (c *Cleanup) Close(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			err = &CleanupError{cause: err, cleanup: c}
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.runtime != nil {
-		if err := c.runtime.Close(ctx); err != nil {
+	if c.Runtime != nil {
+		if err := c.Runtime.Close(ctx); err != nil {
 			return fmt.Errorf("关闭runtime: %w", err)
 		}
-		c.runtime = nil
+		c.Runtime = nil
 	}
 	var result error
-	if c.binding != nil {
+	if c.Binding != nil {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := c.binding.Close(); err != nil {
+		if err := c.Binding.Close(); err != nil {
 			result = fmt.Errorf("关闭绑定资源: %w", err)
 		} else {
-			c.binding = nil
+			c.Binding = nil
 		}
 	}
-	if c.backend != nil {
+	if c.Backend != nil {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(result, err)
 		}
-		if err := c.backend(); err != nil {
+		if err := c.Backend(); err != nil {
 			result = errors.Join(result, fmt.Errorf("关闭后端: %w", err))
 		} else {
-			c.backend = nil
+			c.Backend = nil
 		}
 	}
 	return result
@@ -130,7 +135,7 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	if a == nil {
 		return Result{}, ErrBackendUnavailable
 	}
-	cleanup := &commandCleanup{backend: a.CloseBackend}
+	cleanup := &Cleanup{Backend: a.CloseBackend}
 	timeout := a.CloseTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -138,9 +143,7 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
-		if closeErr := cleanup.close(closeCtx); closeErr != nil {
-			err = &CleanupError{cause: errors.Join(err, closeErr), cleanup: cleanup}
-		}
+		err = errors.Join(err, cleanup.Close(closeCtx))
 		if err != nil {
 			result = Result{}
 		}
@@ -152,13 +155,13 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	if err != nil {
 		var pending *core.RuntimeOpenError
 		if errors.As(err, &pending) {
-			cleanup.runtime = pending
+			cleanup.Runtime = pending
 		}
 		return Result{}, err
 	}
-	cleanup.runtime = runtime
+	cleanup.Runtime = runtime
 	if a.Bind != nil {
-		cleanup.binding, err = a.Bind(runtime)
+		cleanup.Binding, err = a.Bind(runtime)
 		if err != nil {
 			return Result{}, err
 		}

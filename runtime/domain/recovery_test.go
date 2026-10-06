@@ -44,7 +44,7 @@ func TestRecoveryRecordsRetainIdentityAndAttempts(t *testing.T) {
 			{"id":"attempt-1","execution_id":"execution-1","number":1,"status":"interrupted","started_at":"2026-09-20T01:00:00Z","finished_at":"2026-09-20T01:01:00Z","error":{"kind":"interrupted","message":"process stopped before commit"}},
 			{"id":"attempt-2","execution_id":"execution-1","number":2,"status":"succeeded","started_at":"2026-09-20T01:02:00Z","finished_at":"2026-09-20T01:03:00Z"}
 		],
-		"action": {"request":{"id":"action-1","execution_id":"execution-1","type":"echo","payload":{"message":"hello"}},"agent_id":"agent-1","handler_version":"v1","recovery_policy":"safe_retry","idempotency_key":"echo-action-1","max_attempts":3,"status":"succeeded","attempt_count":1,"result_event_id":"result-event-1","result":{"action_id":"action-1","event_id":"result-event-1","status":"succeeded","output":{"message":"hello","metadata":null}}}
+		"action": {"request":{"id":"action-1","execution_id":"execution-1","type":"echo","payload":{"message":"hello"}},"agent_id":"agent-1","handler_version":"v1","recovery_policy":"safe_retry","max_attempts":3,"status":"succeeded","attempt_count":1,"result_event_id":"result-event-1","result":{"action_id":"action-1","event_id":"result-event-1","status":"succeeded","output":{"message":"hello","metadata":null}}}
 	}`
 	type snapshot struct {
 		Agent     AgentInstance `json:"agent"`
@@ -90,7 +90,7 @@ func TestRecoveryRecordsRetainIdentityAndAttempts(t *testing.T) {
 	if original.Action.Result == nil || original.Action.Result.ActionID != action.ID || original.Action.Result.EventID != original.Action.ResultEventID {
 		t.Fatalf("action result lost stable associations: %#v", original.Action)
 	}
-	if original.Action.HandlerVersion != "v1" || original.Action.RecoveryPolicy != RecoveryPolicySafeRetry || original.Action.Status != ActionStatusSucceeded || original.Action.IdempotencyKey != "echo-action-1" || original.Action.MaxAttempts != 3 {
+	if original.Action.HandlerVersion != "v1" || original.Action.RecoveryPolicy != RecoveryPolicySafeRetry || original.Action.Status != ActionStatusSucceeded || original.Action.MaxAttempts != 3 {
 		t.Fatalf("action recovery metadata lost: %#v", original.Action)
 	}
 	encoded, err := json.Marshal(original)
@@ -120,7 +120,6 @@ func TestUnknownActionRetainsAttemptReasonWithoutFinalResult(t *testing.T) {
 			AgentID:        "agent-1",
 			HandlerVersion: "v1",
 			RecoveryPolicy: RecoveryPolicyManual,
-			IdempotencyKey: "send-action-1",
 			MaxAttempts:    1,
 			Status:         ActionStatusUnknown,
 			AttemptCount:   1,

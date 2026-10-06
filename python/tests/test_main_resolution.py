@@ -84,7 +84,7 @@ class MainResolutionTests(unittest.TestCase):
         self.assertEqual(state, saved)
         self.assertEqual(context.event.payload, frozen)
         update = output.state_update
-        for key in ("messages", "pending_message", "pending_messages", "pending_tool_calls", "tool_rounds", "request_event_id", "request_execution_id"):
+        for key in ("messages", "pending_messages", "pending_tool_calls", "tool_rounds", "request_event_id", "request_execution_id"):
             self.assertEqual(update[key], state[key])
         self.assertEqual(update["request_status"], "waiting")
         self.assertEqual(update["waiting_action_id"], retry.id)
@@ -157,7 +157,7 @@ class MainResolutionTests(unittest.TestCase):
         self.assertEqual(final["result_event_id"], context.event.id)
         self.assertEqual(final["request_event_id"], state["request_event_id"])
         self.assertEqual(final["request_execution_id"], state["request_execution_id"])
-        for key in ("pending_message", "waiting_action_id", "waiting_action_type", "waiting_execution_id", "result"):
+        for key in ("waiting_action_id", "waiting_action_type", "waiting_execution_id", "result"):
             self.assertIsNone(final[key])
         self.assertEqual(final["pending_messages"], [])
         self.assertEqual(final["pending_tool_calls"], [])
@@ -216,7 +216,6 @@ class MainResolutionTests(unittest.TestCase):
     def test_legacy_without_input_can_retry_then_finish_without_inventing_history(self):
         state, action = self.request()
         del state["messages"]
-        del state["pending_message"]
         del state["waiting_execution_id"]
         del state["waiting_action_type"]
         saved = deepcopy(state)
@@ -229,26 +228,28 @@ class MainResolutionTests(unittest.TestCase):
         final = self.agent.run(self.result_context(restored)).state_update
         self.assertEqual(final["request_status"], "succeeded")
         self.assertEqual(final["messages"], [])
-        self.assertIsNone(final["pending_message"])
+        self.assertEqual(final["pending_messages"], [])
         _, next_action = self.request(final, "新输入")
         self.assertEqual(next_action.payload["messages"][-1], {"role": "user", "content": "新输入"})
 
     def test_legacy_without_input_can_abandon(self):
         state, _ = self.request()
         del state["messages"]
-        del state["pending_message"]
         output = self.agent.run(self.resolution_context(state, decision="abandon"))
         self.assertEqual(output.state_update["request_status"], "failed")
         self.assertEqual(output.state_update["messages"], [])
-        self.assertIsNone(output.state_update["pending_message"])
+        self.assertEqual(output.state_update["pending_messages"], [])
 
     def test_legacy_with_pending_message_only_can_retry_then_record_completed_turn(self):
         state, action = self.request()
+        state["pending_message"] = state["pending_messages"][0]["content"]
         for key in ("pending_messages", "pending_tool_calls", "tool_rounds", "waiting_action_type", "waiting_execution_id"):
             del state[key]
         output = self.agent.run(self.resolution_context(state, action))
         retried = state | output.state_update
         self.assertEqual(retried["pending_messages"], [{"role": "user", "content": "当前输入"}])
+        self.assertIsNone(retried["pending_message"])
+        retried = json.loads(json.dumps(retried))
         final = self.agent.run(self.result_context(retried)).state_update
         self.assertEqual(final["messages"], [{"role": "user", "content": "当前输入"}, {"role": "assistant", "content": "完成"}])
 

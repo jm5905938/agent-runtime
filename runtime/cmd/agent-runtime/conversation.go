@@ -27,7 +27,7 @@ type conversationTurnError struct{ message string }
 func (err *conversationTurnError) Error() string { return err.message }
 
 func noConversationAgent(err error) bool {
-	var cleanup *conversationCleanupError
+	var cleanup *cli.CleanupError
 	return errors.Is(err, errNoMainAgent) && !errors.As(err, &cleanup)
 }
 
@@ -482,7 +482,7 @@ func runConversationLoop(ctx context.Context, options commandOptions, input *con
 			}
 			_, err = sendConversationMessage(ctx, options, open, line)
 			var failed *conversationTurnError
-			var cleanup *conversationCleanupError
+			var cleanup *cli.CleanupError
 			if err == nil || errors.As(err, &failed) && !errors.As(err, &cleanup) {
 				query, err = conversationSnapshot(ctx, options, open, false)
 				if err == nil && failed != nil {

@@ -231,22 +231,26 @@ func TestConversationCleanupRetriesWithoutClosingOwnedResources(t *testing.T) {
 	closeErr := errors.New("session仍在使用")
 	var calls []string
 	fail := true
-	cleanup := &conversationCleanup{
-		runtime: conversationContextCloser(func(context.Context) error {
+	cleanup := &cli.Cleanup{
+		Runtime: conversationContextCloser(func(context.Context) error {
 			calls = append(calls, "runtime")
 			if fail {
 				return closeErr
 			}
 			return nil
 		}),
-		binding: conversationBindingCloser(func() error { calls = append(calls, "binding"); return nil }),
-		backend: func() error { calls = append(calls, "backend"); return nil },
+		Binding: conversationBindingCloser(func() error { calls = append(calls, "binding"); return nil }),
+		Backend: func() error { calls = append(calls, "backend"); return nil },
 	}
-	if err := cleanup.close(context.Background()); !errors.Is(err, closeErr) || !reflect.DeepEqual(calls, []string{"runtime"}) {
+	err := cleanup.Close(context.Background())
+	if !errors.Is(err, closeErr) || !reflect.DeepEqual(calls, []string{"runtime"}) {
 		t.Fatalf("runtime关闭失败后提前关资源: calls=%v err=%v", calls, err)
 	}
 	fail = false
-	pending := &conversationCleanupError{cause: closeErr, cleanup: cleanup}
+	var pending *cli.CleanupError
+	if !errors.As(err, &pending) {
+		t.Fatalf("关闭失败未保留重试入口: %v", err)
+	}
 	if err := pending.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +278,7 @@ func TestConversationCleanupReportsAndRetriesCloseFailures(t *testing.T) {
 	}
 	err := withConversation(context.Background(), commandOptions{request: cli.Request{Command: "status"}}, open, true,
 		func(*core.Runtime, core.AgentSnapshot, func(context.Context) error) error { return callbackErr })
-	var pending *conversationCleanupError
+	var pending *cli.CleanupError
 	if !errors.As(err, &pending) || !errors.Is(err, callbackErr) || !errors.Is(err, backendErr) {
 		t.Fatalf("cleanup吞掉原始或关闭错误: %v", err)
 	}

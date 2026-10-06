@@ -457,11 +457,10 @@ func writeCommandError(stderr io.Writer, asJSON bool, err error, diagnostics ...
 	code, kind := 1, "operation"
 	var usage *cli.UsageError
 	var cleanup *cli.CleanupError
-	var conversationClose *conversationCleanupError
 	switch {
 	case errors.As(err, &usage):
 		code, kind = 2, "usage"
-	case errors.As(err, &cleanup), errors.As(err, &conversationClose):
+	case errors.As(err, &cleanup):
 		kind = "cleanup"
 	case errors.Is(err, cli.ErrBackendUnavailable):
 		kind = "backend_unavailable"

@@ -25,7 +25,6 @@ MAX_TOOL_ROUNDS = 4
 def initial_state() -> JSONObject:
     return {
         "messages": [],
-        "pending_message": None,
         "pending_messages": [],
         "pending_tool_calls": [],
         "tool_rounds": 0,
@@ -112,6 +111,18 @@ def _tool_message(call: JSONObject, result: JSONObject) -> JSONObject:
     return {"role": "tool", "tool_call_id": call["id"], "content": _json_text(result)}
 
 
+def _continue_state(state: JSONObject, history: list[JSONObject], legacy: bool) -> JSONObject:
+    update = initial_state() | deepcopy(state)
+    update["messages"] = history
+    if legacy:
+        update["pending_messages"] = []
+        update["pending_tool_calls"] = []
+        update["tool_rounds"] = 0
+    elif "pending_messages" not in state:
+        update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
+    return update
+
+
 class MainAgent:
     def __init__(
         self, prompt_builder: PromptBuilder | None = None, tools: ToolRegistry | None = None
@@ -130,25 +141,28 @@ class MainAgent:
             for key in ("request_event_id", "request_execution_id", "waiting_action_id"):
                 if not isinstance(state.get(key), str) or not state[key]:
                     raise ValueError(f"main状态无效: {key}")
-            if not legacy and not isinstance(state.get("pending_message"), str):
-                raise ValueError("main状态无效: pending_message")
+            if not legacy and "pending_messages" not in state and not isinstance(state.get("pending_message"), str):
+                raise ValueError("main状态无效: pending_messages")
             if not legacy and "waiting_action_type" in state:
                 if state["waiting_action_type"] != "model.generate" and not self.tools.supports(state["waiting_action_type"]):
                     raise ValueError("main状态无效: waiting_action_type")
                 if not isinstance(state.get("waiting_execution_id"), str) or not state["waiting_execution_id"]:
                     raise ValueError("main状态无效: waiting_execution_id")
                 self._validate_pending(state)
-        elif state.get("pending_message") is not None:
-            raise ValueError("main状态无效: pending_message")
+        elif state.get("pending_message") is not None or state.get("pending_messages"):
+            raise ValueError("main状态无效: pending_messages")
         match context.event.type:
             case "main.request":
-                return self._on_request(context, state, history)
+                result = self._on_request(context, state, history)
             case "action.result":
-                return self._on_result(context, state, history, legacy)
+                result = self._on_result(context, state, history, legacy)
             case "action.resolution":
-                return self._on_resolution(context, state, history, legacy)
+                result = self._on_resolution(context, state, history, legacy)
             case _:
                 raise BusinessError(f"不支持的事件类型: {context.event.type}")
+        if "pending_message" in state:
+            result.state_update["pending_message"] = None
+        return result
 
     def _validate_pending(self, state: JSONObject) -> None:
         pending = state.get("pending_messages")
@@ -157,7 +171,6 @@ class MainAgent:
         if (
             not isinstance(pending, list)
             or not pending
-            or pending[0] != {"role": "user", "content": state["pending_message"]}
             or not isinstance(queue, list)
             or type(rounds) is not int
             or not 0 <= rounds <= MAX_TOOL_ROUNDS
@@ -177,6 +190,8 @@ class MainAgent:
         completed.extend(_tool_message(call, {}) for call in queue)
         completed.append({"role": "assistant", "content": ""})
         _turns(completed)
+        if state.get("pending_message") is not None and pending[0]["content"] != state["pending_message"]:
+            raise ValueError("main状态无效: pending_messages与旧pending_message不匹配")
 
     def _on_request(
         self, context: ExecutionContext, state: JSONObject, history: list[JSONObject]
@@ -192,7 +207,6 @@ class MainAgent:
         update = initial_state()
         update.update(
             messages=_trim_history(history),
-            pending_message=message,
             pending_messages=[{"role": "user", "content": message}],
             request_event_id=context.event.id,
             request_execution_id=context.execution_id,
@@ -241,15 +255,7 @@ class MainAgent:
         reason = payload.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             raise BusinessError("action.resolution需要非空原因")
-        update = initial_state() | deepcopy(state)
-        update["messages"] = history
-        if legacy:
-            update["pending_message"] = None
-            update["pending_messages"] = []
-            update["pending_tool_calls"] = []
-            update["tool_rounds"] = 0
-        elif "pending_messages" not in state:
-            update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
+        update = _continue_state(state, history, legacy)
         if decision == "abandon":
             return self._finish(context, update, error="用户放弃本轮: " + reason)
         retry_payload = payload.get("retry_payload")
@@ -281,7 +287,6 @@ class MainAgent:
         if legacy:
             # 保留旧格式标记，后续结果仍按缺少原输入的兼容路径处理。
             del update["messages"]
-            del update["pending_message"]
         return ExecutionResult(state_update=deepcopy(update), actions=[action])
 
     def _on_result(
@@ -305,15 +310,7 @@ class MainAgent:
             not isinstance(payload.get("error"), str) or not payload["error"]
         ):
             raise BusinessError("失败的模型结果需要错误消息")
-        update = initial_state() | deepcopy(state)
-        update["messages"] = history
-        if legacy:
-            update["pending_message"] = None
-            update["pending_messages"] = []
-            update["pending_tool_calls"] = []
-            update["tool_rounds"] = 0
-        elif "pending_messages" not in state:
-            update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
+        update = _continue_state(state, history, legacy)
         if self.tools.supports(action_type):
             call = update["pending_tool_calls"].pop(0)
             if status == "failed":
@@ -391,7 +388,6 @@ class MainAgent:
             request_status="failed" if error is not None else "succeeded",
             result=result,
             error=error,
-            pending_message=None,
             pending_messages=[],
             pending_tool_calls=[],
             tool_rounds=0,

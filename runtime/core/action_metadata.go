@@ -5,7 +5,6 @@ import (
 	"agent-runtime/domain"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 )
 
@@ -28,7 +27,7 @@ func (e *Executor) RegisterWithOptions(actionType string, handler ActionHandler,
 	if strings.TrimSpace(actionType) == "" || strings.TrimSpace(options.Version) == "" {
 		return fmt.Errorf("注册action: type/version不能为空")
 	}
-	if nilHandler(handler) {
+	if isNilValue(handler) {
 		return fmt.Errorf("注册action类型%s: handler不能为空", actionType)
 	}
 	if options.RecoveryPolicy != domain.RecoveryPolicyManual && options.RecoveryPolicy != domain.RecoveryPolicySafeRetry {
@@ -77,8 +76,8 @@ func (e *Executor) prepareActions(agentID, executionID domain.ID, actions []doma
 		action.BindExecution(executionID)
 		records = append(records, domain.ActionRecord{
 			Request: action, AgentID: agentID, HandlerVersion: options.Version,
-			RecoveryPolicy: options.RecoveryPolicy, IdempotencyKey: string(action.ID),
-			MaxAttempts: options.MaxAttempts, Status: domain.ActionStatusPending,
+			RecoveryPolicy: options.RecoveryPolicy,
+			MaxAttempts:    options.MaxAttempts, Status: domain.ActionStatusPending,
 			ResultEventID: resultEventID,
 		})
 	}
@@ -98,16 +97,4 @@ func (e *Executor) handlerFor(record domain.ActionRecord) (ActionHandler, error)
 			ErrHandlerUnavailable, record.Request.Type, record.HandlerVersion, options.Version)
 	}
 	return handler, nil
-}
-
-func nilHandler(handler ActionHandler) bool {
-	if handler == nil {
-		return true
-	}
-	value := reflect.ValueOf(handler)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	}
-	return false
 }

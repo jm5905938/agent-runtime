@@ -55,7 +55,7 @@ class MainPromptTests(unittest.TestCase):
         self.assertEqual(state["request_status"], "failed")
         self.assertEqual(output.actions, [])
         self.assertEqual(state["messages"], history)
-        self.assertIsNone(state["pending_message"])
+        self.assertNotIn("pending_message", state)
         self.assertEqual(state["pending_messages"], [])
         self.assertEqual(state["pending_tool_calls"], [])
         self.assertIsNone(state["waiting_action_id"])

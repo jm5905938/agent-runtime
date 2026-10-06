@@ -123,8 +123,8 @@ func newAction(claim *core.ExecutionClaim) domain.ActionRecord {
 	action.BindExecution(claim.Token.ExecutionID)
 	return domain.ActionRecord{
 		Request: action, AgentID: claim.Agent.ID, HandlerVersion: "1",
-		RecoveryPolicy: domain.RecoveryPolicySafeRetry, IdempotencyKey: string(action.ID),
-		MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID,
+		RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+		MaxAttempts:    2, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID,
 	}
 }
 

@@ -27,7 +27,6 @@ func testActionMetadataValidation(t *testing.T, backend core.RecoveryStore) {
 		{"blank_agent_id", func(a *domain.ActionRecord) { a.AgentID = " \t\u3000\n" }},
 		{"blank_execution_id", func(a *domain.ActionRecord) { a.Request.BindExecution(" \t\u3000\n") }},
 		{"blank_handler_version", func(a *domain.ActionRecord) { a.HandlerVersion = " \t\u3000\n" }},
-		{"blank_idempotency_key", func(a *domain.ActionRecord) { a.IdempotencyKey = " \t\u3000\n" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			agent := createAgent(t, s, domain.ID(fmt.Sprintf("agent-%d", i)))
@@ -96,7 +95,6 @@ func testActionMetadataRoundTrip(t *testing.T, backend core.RecoveryStore) {
 	action.Request.ID = " action with spaces "
 	action.Request.Type = " echo with spaces "
 	action.HandlerVersion = " version with spaces "
-	action.IdempotencyKey = " key with spaces "
 	action.ResultEventID = " result event with spaces "
 	_, err := s.CommitExecution(ctx, core.ExecutionCommit{Token: execution.Token, Actions: []domain.ActionRecord{action}})
 	must(t, err)
@@ -119,7 +117,7 @@ func testActionMetadataRoundTrip(t *testing.T, backend core.RecoveryStore) {
 	must(t, err)
 	sameJSON(t, completed.Action.Request, action.Request)
 	if completed.Action.AgentID != action.AgentID || completed.Action.ResultEventID != action.ResultEventID ||
-		completed.Action.HandlerVersion != action.HandlerVersion || completed.Action.IdempotencyKey != action.IdempotencyKey {
+		completed.Action.HandlerVersion != action.HandlerVersion {
 		t.Fatalf("完成修改了有效action元数据: %+v", completed.Action)
 	}
 	beforeReopen := snapshotFailureContract(t, reopened)

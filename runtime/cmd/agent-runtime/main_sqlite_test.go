@@ -262,7 +262,7 @@ func TestMainSQLiteCommandsAcrossProcesses(t *testing.T) {
 	})
 
 	t.Run("resume_saved_action_without_repeating_request", func(t *testing.T) {
-		for _, mode := range []string{"pending", "completed", "interrupted"} {
+		for _, mode := range []string{"pending", "completed", "legacy_completed", "interrupted"} {
 			t.Run(mode, func(t *testing.T) {
 				directory := filepath.Join(t.TempDir(), "data")
 				created, _ := p.call(t, directory, 0, "init", "--definition", "main")
@@ -275,9 +275,16 @@ func TestMainSQLiteCommandsAcrossProcesses(t *testing.T) {
 				receipt := mainSQLiteSaveAction(t, p, directory, created.Agent.ID, "resume", mode)
 				beforeCalls := calls.Load()
 				before, _ := p.call(t, directory, 0, "status", "--agent", agentID)
-				if before.Query.Agent.State["request_status"] != "waiting" || before.Query.Agent.StateVersion != 3 || len(before.Query.Actions) != 2 ||
-					before.Query.Agent.State["pending_message"] != "恢复消息" {
+				if before.Query.Agent.State["request_status"] != "waiting" || before.Query.Agent.StateVersion != 3 || len(before.Query.Actions) != 2 {
 					t.Fatalf("恢复fixture未保存waiting状态: %+v", before.Query)
+				}
+				mainSQLiteAssertMessages(t, before.Query.Agent.State["pending_messages"], []mainSQLiteMessage{{Role: "user", Content: "恢复消息"}})
+				if mode == "legacy_completed" {
+					if before.Query.Agent.State["pending_message"] != "恢复消息" {
+						t.Fatal("旧状态fixture缺少重复消息")
+					}
+				} else if _, exists := before.Query.Agent.State["pending_message"]; exists {
+					t.Fatal("新状态仍然保存重复消息")
 				}
 				mainSQLiteAssertMessages(t, before.Query.Agent.State["messages"], history)
 				if mode == "pending" {
@@ -321,10 +328,10 @@ func TestMainSQLiteCommandsAcrossProcesses(t *testing.T) {
 						blocked = blocked || reason.Code == core.BlockManualUnknown
 					}
 					if action.Action.Status != domain.ActionStatusUnknown || action.Ready || !blocked || after.Query.Agent.State["request_status"] != "waiting" ||
-						after.Query.Agent.StateVersion != 3 || len(after.Query.Deliveries) != 3 || calls.Load() != beforeCalls ||
-						after.Query.Agent.State["pending_message"] != "恢复消息" {
+						after.Query.Agent.StateVersion != 3 || len(after.Query.Deliveries) != 3 || calls.Load() != beforeCalls {
 						t.Fatalf("模型结果未知时自动重试或丢失waiting状态: %+v", after.Query)
 					}
+					mainSQLiteAssertMessages(t, after.Query.Agent.State["pending_messages"], []mainSQLiteMessage{{Role: "user", Content: "恢复消息"}})
 					mainSQLiteAssertMessages(t, after.Query.Agent.State["messages"], history)
 					return
 				}
@@ -402,7 +409,10 @@ func mainSQLiteSaveAction(t *testing.T, p sqliteCommandProcess, directory string
 	action.BindExecution(claim.Token.ExecutionID)
 	record := domain.ActionRecord{
 		Request: action, AgentID: agentID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicyManual,
-		IdempotencyKey: string(action.ID), MaxAttempts: 1, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID,
+		MaxAttempts: 1, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID,
+	}
+	if mode == "legacy_completed" {
+		output.StateUpdate["pending_message"] = claim.Event.Payload["message"]
 	}
 	if _, err := session.CommitExecution(ctx, core.ExecutionCommit{Token: claim.Token, StateUpdate: output.StateUpdate, Actions: []domain.ActionRecord{record}}); err != nil {
 		t.Fatal(err)
@@ -415,7 +425,7 @@ func mainSQLiteSaveAction(t *testing.T, p sqliteCommandProcess, directory string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode == "completed" {
+	if mode == "completed" || mode == "legacy_completed" {
 		result := domain.ActionResult{ActionID: action.ID, EventID: record.ResultEventID, Status: domain.ActionStatusSucceeded, Output: map[string]any{"message": "已保存的回复"}}
 		event := domain.NewEvent("action.result", map[string]any{
 			"action_id": string(action.ID), "execution_id": string(claim.Token.ExecutionID), "action_type": action.Type,

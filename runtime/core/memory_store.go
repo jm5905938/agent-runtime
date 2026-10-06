@@ -477,7 +477,7 @@ func (s *MemoryStore) CompleteAction(ctx context.Context, completion ActionCompl
 	if !exists {
 		return domain.ActionResult{}, ErrStoreNotFound
 	}
-	if err := validateActionCompletion(action, completion); err != nil {
+	if err := ValidateActionCompletion(action, completion); err != nil {
 		return domain.ActionResult{}, err
 	}
 	if action.Result != nil {
@@ -517,45 +517,6 @@ func (s *MemoryStore) CompleteAction(ctx context.Context, completion ActionCompl
 		s.deliveryOrder = append(s.deliveryOrder, received.Delivery.Key)
 	}
 	return memoryCloneActionResult(result), nil
-}
-
-func validateActionCompletion(action domain.ActionRecord, completion ActionCompletion) error {
-	if err := ValidateActionMetadata(action); err != nil {
-		return err
-	}
-	result, event := completion.Result, completion.Event
-	if result.ActionID != action.Request.ID || result.EventID != action.ResultEventID || event.ID != action.ResultEventID || event.Type != "action.result" {
-		return fmt.Errorf("action结果身份不匹配: %w", ErrStoreConflict)
-	}
-	if result.Status != domain.ActionStatusSucceeded && result.Status != domain.ActionStatusFailed {
-		return fmt.Errorf("action结果不是最终状态: %w", ErrStoreConflict)
-	}
-	if (result.Status == domain.ActionStatusSucceeded && result.Error != nil) || (result.Status == domain.ActionStatusFailed && result.Error == nil) {
-		return fmt.Errorf("action结果与错误不一致: %w", ErrStoreConflict)
-	}
-	if result.Error != nil {
-		if err := validateStoredFailure(*result.Error); err != nil {
-			return err
-		}
-	}
-	if _, err := codec.Encode(completion); err != nil {
-		return err
-	}
-	expected := map[string]any{"action_id": string(action.Request.ID), "action_type": action.Request.Type,
-		"execution_id": string(*action.Request.ExecutionID), "status": string(result.Status)}
-	if result.Status == domain.ActionStatusSucceeded {
-		expected["result"] = result.Output
-	} else {
-		expected["error"] = result.Error.Message
-	}
-	equal, err := sameJSONValue(expected, event.Payload)
-	if err != nil {
-		return err
-	}
-	if !equal {
-		return fmt.Errorf("action结果event内容不匹配: %w", ErrStoreConflict)
-	}
-	return nil
 }
 
 func (s *MemoryStore) RecordActionUnknown(ctx context.Context, token ActionToken, failure domain.Failure) error {

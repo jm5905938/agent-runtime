@@ -57,3 +57,8 @@ type RunnerFailure interface {
 	error
 	FailureKind() domain.ErrorKind
 }
+
+func snapshotAgent(agent domain.AgentInstance) AgentSnapshot {
+	return AgentSnapshot{ID: agent.ID, Name: agent.Name, Definition: agent.Definition,
+		Status: agent.Status, State: cloneMap(agent.State), StateVersion: agent.StateVersion}
+}

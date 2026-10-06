@@ -62,7 +62,7 @@ func TestIngressSubmitPreservesRunningExecutionAndAction(t *testing.T) {
 	request := domain.NewAction("model.generate", nil)
 	request.BindExecution(source.Token.ExecutionID)
 	action := domain.ActionRecord{Request: request, AgentID: agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicyManual,
-		IdempotencyKey: string(request.ID), MaxAttempts: 1, Status: domain.ActionStatusPending, ResultEventID: "reserved-result"}
+		MaxAttempts: 1, Status: domain.ActionStatusPending, ResultEventID: "reserved-result"}
 	if _, err := s.CommitExecution(ctx, core.ExecutionCommit{Token: source.Token, Actions: []domain.ActionRecord{action}}); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestIngressDuplicateConflictAndReservedResult(t *testing.T) {
 			request := domain.NewAction("echo", nil)
 			request.BindExecution(execution.Token.ExecutionID)
 			action := domain.ActionRecord{Request: request, AgentID: agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-				IdempotencyKey: string(request.ID), MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: "reserved-result"}
+				MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: "reserved-result"}
 			if _, err := s.CommitExecution(ctx, core.ExecutionCommit{Token: execution.Token, Actions: []domain.ActionRecord{action}}); err != nil {
 				t.Fatal(err)
 			}

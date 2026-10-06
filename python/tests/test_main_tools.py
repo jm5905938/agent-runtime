@@ -81,7 +81,7 @@ class MainToolTests(unittest.TestCase):
 
     def assert_finished(self, state, status="succeeded"):
         self.assertEqual(state["request_status"], status)
-        self.assertIsNone(state["pending_message"])
+        self.assertIsNone(state.get("pending_message"))
         self.assertEqual(state["pending_messages"], [])
         self.assertEqual(state["pending_tool_calls"], [])
         self.assertIsNone(state["waiting_action_id"])
@@ -475,6 +475,8 @@ class MainToolTests(unittest.TestCase):
         state, output = self.call_tools(legacy)
         self.assertEqual(output.actions[0].type, "tool.agent_status")
         self.assertEqual(state["pending_messages"][0], {"role": "user", "content": "old current"})
+        self.assertIsNone(state["pending_message"])
+        state = json.loads(json.dumps(state))
         state, _ = self.reply(state, result={"status": "active"})
         state, _ = self.reply(state)
         self.assert_finished(state)
