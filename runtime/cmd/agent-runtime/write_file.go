@@ -76,10 +76,16 @@ func (handler writeFileHandler) Execute(action domain.Action) (map[string]any, e
 	if err != nil {
 		return nil, fmt.Errorf("write_file创建失败: %w", err)
 	}
-	defer file.Close()
-
-	if _, err := file.Write(contentBytes); err != nil {
-		return nil, fmt.Errorf("write_file写入失败: %w", err)
+	written, writeErr := file.Write(contentBytes)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return nil, fmt.Errorf("write_file写入失败: %w", writeErr)
+	}
+	if written != len(contentBytes) {
+		return nil, errors.New("write_file写入不完整")
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("write_file关闭失败: %w", closeErr)
 	}
 
 	return map[string]any{

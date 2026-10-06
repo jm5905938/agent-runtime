@@ -9,6 +9,7 @@ from agent_runtime.agents import MainAgent
 from agent_runtime.agents.main import initial_state
 from agent_runtime.prompt import PromptBuilder
 from agent_runtime.tools import default_tools
+from agent_runtime.tool import Tool, ToolRegistry
 
 
 def tool_call():
@@ -213,7 +214,7 @@ class MainResolutionTests(unittest.TestCase):
         saved = deepcopy(waiting)
         self.assertEqual(waiting["waiting_action_type"], "tool.agent_status")
 
-        context = self.resolution_context(waiting, decision="retry", action_type="tool.agent_status")
+        context = self.resolution_context(waiting, decision="retry", action_type="tool.agent_status", retry_payload={"agent_id": "agent-1"})
         output = self.agent.run(context)
 
         self.assertEqual(waiting, saved)
@@ -229,6 +230,44 @@ class MainResolutionTests(unittest.TestCase):
         self.assertEqual(retried["waiting_action_id"], action.id)
         self.assertEqual(retried["waiting_execution_id"], context.execution_id)
         self.assertEqual(retried["pending_tool_calls"], waiting["pending_tool_calls"])
+
+    def test_waiting_tool_retry_replays_payload_after_tool_rules_change(self):
+        calls = []
+
+        def prepare(arguments, context):
+            calls.append(deepcopy(arguments))
+            if len(calls) > 1:
+                raise ValueError("工具规则已变化，不再接受这些参数")
+            return arguments | {"source": context.agent.id}
+
+        registry = ToolRegistry([Tool(
+            name="inspect", description="检查测试文本",
+            parameters={
+                "type": "object", "properties": {"text": {"type": "string"}},
+                "required": ["text"], "additionalProperties": False,
+            },
+            prepare=prepare,
+        )])
+        self.agent = MainAgent(PromptBuilder("冻结的system", 100_000), registry)
+
+        state, _ = self.request()
+        call = {
+            "id": "call-1", "type": "function",
+            "function": {"name": "inspect", "arguments": '{"text":"旧参数"}'},
+        }
+        waiting = state | self.agent.run(
+            self.result_context(state, {"message": "", "tool_calls": [call]})
+        ).state_update
+        self.assertEqual(len(calls), 1)
+
+        frozen = {"text": "旧参数", "source": "agent-1"}
+        output = self.agent.run(self.resolution_context(
+            waiting, decision="retry", action_type="tool.inspect", retry_payload=frozen,
+        ))
+
+        self.assertEqual(len(calls), 1)  # 重试没有再调用prepare
+        self.assertEqual(output.actions[0].type, "tool.inspect")
+        self.assertEqual(output.actions[0].payload, frozen)
 
     def test_waiting_tool_abandon_drops_incomplete_round(self):
         waiting = self.waiting_tool_state()

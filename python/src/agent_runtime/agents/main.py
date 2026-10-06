@@ -253,8 +253,11 @@ class MainAgent:
             update["pending_messages"] = [{"role": "user", "content": state["pending_message"]}]
         if decision == "abandon":
             return self._finish(context, update, error="用户放弃本轮: " + reason)
+        retry_payload = payload.get("retry_payload")
         if is_tool:
-            retry = self.tools.create_action(update["pending_tool_calls"][0], context)
+            if not isinstance(retry_payload, dict):
+                raise BusinessError("重试工具调用需要已保存的payload对象")
+            retry = Action(id=str(uuid4()), type=action_type, payload=deepcopy(retry_payload))
             update.update(
                 waiting_action_id=retry.id,
                 waiting_action_type=retry.type,
