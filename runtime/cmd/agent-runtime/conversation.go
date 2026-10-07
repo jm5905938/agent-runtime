@@ -57,7 +57,7 @@ func waitingUnknownConversationAction(query core.AgentQuery) *core.ActionQuery {
 	for i := range query.Actions {
 		action := &query.Actions[i]
 		if query.Agent.State["waiting_action_id"] == string(action.Action.Request.ID) && action.Action.Status == domain.ActionStatusUnknown &&
-			(action.Action.Request.Type == "model.generate" && action.Action.RecoveryPolicy == domain.RecoveryPolicyManual || cancelledUnknownAction(query, action)) && action.Resolution == nil {
+			(action.Action.RecoveryPolicy == domain.RecoveryPolicyManual || cancelledUnknownAction(query, action)) && action.Resolution == nil {
 			return action
 		}
 	}

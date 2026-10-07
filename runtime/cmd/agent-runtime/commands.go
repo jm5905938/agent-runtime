@@ -194,6 +194,50 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	if err := runtime.RegisterSubagentTools(); err != nil {
 		return runner, err
 	}
+	if err := runtime.Executor().RegisterWithOptions(
+		getCurrentTimeActionType,
+		getCurrentTimeHandler{},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+			MaxAttempts:    3,
+		},
+	); err != nil {
+		return runner, err
+	}
+	if err := runtime.Executor().RegisterWithOptions(
+		getCurrentDateActionType,
+		getCurrentDateHandler{},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+			MaxAttempts:    3,
+		},
+	); err != nil {
+		return runner, err
+	}
+	if err := runtime.Executor().RegisterWithOptions(
+		readFileActionType,
+		readFileHandler{rootDir: options.python.SourceDir},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
+			MaxAttempts:    3,
+		},
+	); err != nil {
+		return runner, err
+	}
+	if err := runtime.Executor().RegisterWithOptions(
+		writeFileActionType,
+		writeFileHandler{rootDir: options.python.SourceDir},
+		core.HandlerOptions{
+			Version:        "1",
+			RecoveryPolicy: domain.RecoveryPolicyManual,
+			MaxAttempts:    1,
+		},
+	); err != nil {
+		return runner, err
+	}
 	if options.request.Command == "run" {
 		needed, err := modelWorkPending(ctx, runtime)
 		if err != nil {

@@ -9,6 +9,7 @@ from agent_runtime.agents import MainAgent
 from agent_runtime.agents.main import initial_state
 from agent_runtime.prompt import PromptBuilder
 from agent_runtime.tools import default_tools
+from agent_runtime.tool import Tool, ToolRegistry
 
 
 def tool_call():
@@ -200,6 +201,92 @@ class MainResolutionTests(unittest.TestCase):
             with self.subTest(decision=decision), self.assertRaises(BusinessError):
                 self.agent.run(self.resolution_context(waiting, action, decision=decision))
             self.assertEqual(waiting, saved)
+
+    def waiting_tool_state(self):
+        state, _ = self.request()
+        output = self.agent.run(
+            self.result_context(state, {"message": "", "tool_calls": [tool_call()]})
+        )
+        return state | output.state_update
+
+    def test_waiting_tool_retry_rebuilds_same_action(self):
+        waiting = self.waiting_tool_state()
+        saved = deepcopy(waiting)
+        self.assertEqual(waiting["waiting_action_type"], "tool.agent_status")
+
+        context = self.resolution_context(waiting, decision="retry", action_type="tool.agent_status", retry_payload={"agent_id": "agent-1"})
+        output = self.agent.run(context)
+
+        self.assertEqual(waiting, saved)
+        self.assertEqual(len(output.actions), 1)
+        action = output.actions[0]
+        self.assertEqual(action.type, "tool.agent_status")
+        self.assertEqual(action.payload, {"agent_id": "agent-1"})
+        self.assertNotIn("retry_of", action.payload)
+
+        retried = waiting | output.state_update
+        self.assertEqual(retried["request_status"], "waiting")
+        self.assertEqual(retried["waiting_action_type"], "tool.agent_status")
+        self.assertEqual(retried["waiting_action_id"], action.id)
+        self.assertEqual(retried["waiting_execution_id"], context.execution_id)
+        self.assertEqual(retried["pending_tool_calls"], waiting["pending_tool_calls"])
+
+    def test_waiting_tool_retry_replays_payload_after_tool_rules_change(self):
+        calls = []
+
+        def prepare(arguments, context):
+            calls.append(deepcopy(arguments))
+            if len(calls) > 1:
+                raise ValueError("工具规则已变化，不再接受这些参数")
+            return arguments | {"source": context.agent.id}
+
+        registry = ToolRegistry([Tool(
+            name="inspect", description="检查测试文本",
+            parameters={
+                "type": "object", "properties": {"text": {"type": "string"}},
+                "required": ["text"], "additionalProperties": False,
+            },
+            prepare=prepare,
+        )])
+        self.agent = MainAgent(PromptBuilder("冻结的system", 100_000), registry)
+
+        state, _ = self.request()
+        call = {
+            "id": "call-1", "type": "function",
+            "function": {"name": "inspect", "arguments": '{"text":"旧参数"}'},
+        }
+        waiting = state | self.agent.run(
+            self.result_context(state, {"message": "", "tool_calls": [call]})
+        ).state_update
+        self.assertEqual(len(calls), 1)
+
+        frozen = {"text": "旧参数", "source": "agent-1"}
+        output = self.agent.run(self.resolution_context(
+            waiting, decision="retry", action_type="tool.inspect", retry_payload=frozen,
+        ))
+
+        self.assertEqual(len(calls), 1)  # 重试没有再调用prepare
+        self.assertEqual(output.actions[0].type, "tool.inspect")
+        self.assertEqual(output.actions[0].payload, frozen)
+
+    def test_waiting_tool_abandon_drops_incomplete_round(self):
+        waiting = self.waiting_tool_state()
+        saved = deepcopy(waiting)
+
+        output = self.agent.run(
+            self.resolution_context(waiting, decision="abandon", action_type="tool.agent_status")
+        )
+
+        self.assertEqual(waiting, saved)
+        self.assertEqual(output.actions, [])
+        final = waiting | output.state_update
+        self.assertEqual(final["request_status"], "failed")
+        self.assertIn("不再等待", final["error"])
+        self.assertEqual(final["pending_tool_calls"], [])
+        self.assertEqual(final["pending_messages"], [])
+        self.assertEqual(final["messages"], [])
+        self.assertIsNone(final["waiting_action_id"])
+        self.assertIsNone(final["waiting_action_type"])
 
     def test_existing_state_and_history_validation_still_precede_resolution(self):
         state, action = self.request()

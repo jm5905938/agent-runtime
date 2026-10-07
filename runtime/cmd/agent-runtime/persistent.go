@@ -75,7 +75,7 @@ func queryNeedsModel(query core.AgentQuery) bool {
 		return true
 	}
 	for _, action := range query.Actions {
-		if modelAgentDefinition(agent.Definition) && strings.HasPrefix(action.Action.Request.Type, "tool.") && action.Ready {
+		if modelAgentDefinition(agent.Definition) && isToolActionType(action.Action.Request.Type) && action.Ready {
 			return true
 		}
 		if action.Action.Request.Type != "model.generate" {
@@ -115,7 +115,7 @@ func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) b
 	}
 	payload := delivery.Event.Payload
 	actionType, _ := payload["action_type"].(string)
-	if strings.HasPrefix(actionType, "tool.") {
+	if isToolActionType(actionType) {
 		return payload["status"] == "succeeded" || payload["status"] == "failed"
 	}
 	if actionType != "model.generate" || payload["status"] != "succeeded" {
@@ -124,6 +124,12 @@ func deliveryNeedsModel(agent core.AgentSnapshot, delivery core.DeliveryQuery) b
 	result, _ := payload["result"].(map[string]any)
 	toolCalls, _ := result["tool_calls"].([]any)
 	return len(toolCalls) > 0
+}
+
+// Python的ToolRegistry把所有工具Action命名为tool.<name>，以此识别main的默认工具。
+// 就绪的工具Action执行后要续轮，工具结果本身就是模型输入，两者都需要模型配置。
+func isToolActionType(actionType string) bool {
+	return strings.HasPrefix(actionType, "tool.")
 }
 
 func waitingResultMatches(agent core.AgentSnapshot, delivery core.DeliveryQuery) bool {

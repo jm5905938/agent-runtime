@@ -69,7 +69,7 @@ func mainToolsReadRequest(t *testing.T, r *http.Request) mainToolsModelRequest {
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		t.Errorf("读取模型请求: %v", err)
 	}
-	if request.Model != "test-model" || request.Stream || (len(request.Tools) != 1 && len(request.Tools) != 4) {
+	if request.Model != "test-model" || request.Stream || (len(request.Tools) != 1 && len(request.Tools) != 8) {
 		t.Errorf("模型请求缺少工具声明: %+v", request)
 		return request
 	}
@@ -78,11 +78,11 @@ func mainToolsReadRequest(t *testing.T, r *http.Request) mainToolsModelRequest {
 		t.Errorf("agent_status工具声明错误: %+v", request.Tools)
 		return request
 	}
-	if len(request.Tools) == 4 {
-		for i, name := range []string{"spawn_subagent", "wait_subagent", "cancel_subagent"} {
+	if len(request.Tools) == 8 {
+		for i, name := range []string{"spawn_subagent", "wait_subagent", "cancel_subagent", "get_current_time", "get_current_date", "read_file", "write_file"} {
 			function, ok := request.Tools[i+1]["function"].(map[string]any)
 			if !ok || function["name"] != name {
-				t.Errorf("subagent工具声明错误: %+v", request.Tools)
+				t.Errorf("main工具声明错误: %+v", request.Tools)
 			}
 		}
 	}

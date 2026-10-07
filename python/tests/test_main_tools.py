@@ -101,12 +101,13 @@ class MainToolTests(unittest.TestCase):
         self.assertEqual(state["waiting_action_type"], "model.generate")
         tools = output.actions[0].payload["tools"]
         self.assertEqual(
-            [tool["function"]["name"] for tool in tools],
-            ["agent_status", "spawn_subagent", "wait_subagent", "cancel_subagent"],
+            {item["function"]["name"] for item in tools},
+            {"agent_status", "spawn_subagent", "wait_subagent", "cancel_subagent",
+             "get_current_time", "get_current_date", "read_file", "write_file"},
         )
-        self.assertEqual(tools[0]["type"], "function")
-        self.assertEqual(tools[0]["function"]["name"], "agent_status")
-        self.assertEqual(tools[0]["function"]["parameters"]["type"], "object")
+        for item in tools:
+            self.assertEqual(item["type"], "function")
+            self.assertEqual(item["function"]["parameters"]["type"], "object")
 
     def test_complete_tool_trajectory_is_committed_only_after_final_reply(self):
         state, _ = self.request()

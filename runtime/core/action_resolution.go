@@ -67,7 +67,7 @@ func (r *Runtime) ResolveAction(ctx context.Context, actionID domain.ID, decisio
 		return ActionResolutionReceipt{}, fmt.Errorf("action缺少来源execution: %w", ErrStoreConflict)
 	}
 	if action.Status != domain.ActionStatusUnknown {
-		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的model.generate: %w", ErrStoreConflict)
+		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的action: %w", ErrStoreConflict)
 	}
 	agent, err := r.store.LoadAgent(ctx, action.AgentID)
 	if err != nil {
@@ -106,9 +106,9 @@ func (r *Runtime) ResolveAction(ctx context.Context, actionID domain.ID, decisio
 	if err != nil {
 		return ActionResolutionReceipt{}, err
 	}
-	model := action.Request.Type == "model.generate" && action.RecoveryPolicy == domain.RecoveryPolicyManual
-	if !model && !(cancelled && agent.Definition == (domain.DefinitionRef{ID: "subagent", Version: "1"}) && decision == ResolutionAbandon) {
-		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的model.generate: %w", ErrStoreConflict)
+	manual := action.RecoveryPolicy == domain.RecoveryPolicyManual
+	if !manual && !(cancelled && agent.Definition == (domain.DefinitionRef{ID: "subagent", Version: "1"}) && decision == ResolutionAbandon) {
+		return ActionResolutionReceipt{}, fmt.Errorf("仅能处理manual策略且结果unknown的action: %w", ErrStoreConflict)
 	}
 	if cancelled && decision == ResolutionRetry {
 		return ActionResolutionReceipt{}, fmt.Errorf("已请求取消的subagent不能重试模型调用: %w", ErrStoreConflict)
@@ -179,7 +179,7 @@ func resolutionFromEvent(action domain.ActionRecord, event domain.Event) *Action
 	if (ResolutionDecision(decision) != ResolutionRetry && ResolutionDecision(decision) != ResolutionAbandon) || !validResolutionReason(reason) {
 		return nil
 	}
-	if (action.Request.Type != "model.generate" || action.RecoveryPolicy != domain.RecoveryPolicyManual) && ResolutionDecision(decision) != ResolutionAbandon {
+	if action.RecoveryPolicy != domain.RecoveryPolicyManual && ResolutionDecision(decision) != ResolutionAbandon {
 		return nil
 	}
 	return &ActionResolution{ActionID: action.Request.ID, EventID: event.ID, Decision: ResolutionDecision(decision), Reason: reason}
