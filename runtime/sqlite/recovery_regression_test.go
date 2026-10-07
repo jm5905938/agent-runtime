@@ -39,7 +39,7 @@ func recoveryFixture(t *testing.T) (*Backend, *Session, *core.ExecutionClaim, do
 	request := domain.NewAction("echo", nil)
 	request.BindExecution(source.Token.ExecutionID)
 	action := domain.ActionRecord{Request: request, AgentID: agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-		IdempotencyKey: string(request.ID), MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID}
+		MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: domain.NewEvent("action.result", nil).ID}
 	if _, err := s.CommitExecution(ctx, core.ExecutionCommit{Token: source.Token, Actions: []domain.ActionRecord{action}}); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func recoveryFixture(t *testing.T) (*Backend, *Session, *core.ExecutionClaim, do
 func recoveryDatabaseSnapshot(t *testing.T, b *Backend) map[string][][]any {
 	t.Helper()
 	result := make(map[string][][]any)
-	for _, table := range []string{"agents", "events", "deliveries", "executions", "execution_attempts", "actions", "action_attempts"} {
+	for _, table := range []string{"agents", "events", "deliveries", "executions", "execution_attempts", "actions", "action_attempts", "subagent_tasks"} {
 		rows, err := b.db.Query("SELECT * FROM " + table + " ORDER BY rowid")
 		if err != nil {
 			t.Fatal(err)

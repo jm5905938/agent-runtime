@@ -13,6 +13,9 @@ import (
 )
 
 func acquireOwnership(path string) (*os.File, error) {
+	if err := checkDatabasePath(path); err != nil {
+		return nil, err
+	}
 	// 打开或创建独占锁文件：database.db.lock
 	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -45,6 +48,25 @@ func acquireOwnership(path string) (*os.File, error) {
 		)
 	}
 
-	// Session.Close 会调用 file.Close，Windows 会自动释放锁
+	// Session.Close会调用file.Close，Windows会自动释放锁
 	return file, nil
+}
+
+func checkDatabasePath(path string) error {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("检查sqlite文件: %w", err)
+	}
+	defer file.Close()
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &info); err != nil {
+		return fmt.Errorf("检查sqlite硬链接: %w", err)
+	}
+	if info.NumberOfLinks > 1 {
+		return fmt.Errorf("sqlite不支持硬链接数据库路径")
+	}
+	return nil
 }

@@ -150,7 +150,7 @@ func TestCommitExecutionRollsBackAfterSQLWrites(t *testing.T) {
 	request.BindExecution(claim.Token.ExecutionID)
 	action := domain.ActionRecord{
 		Request: request, AgentID: claim.Agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-		IdempotencyKey: string(request.ID), MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: "result-event",
+		MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: "result-event",
 	}
 	//trigger内部确认前序agent和action写入已发生，再令后续execution写入失败
 	if _, err := s.backend.db.ExecContext(ctx, `CREATE TEMP TRIGGER fail_execution_commit

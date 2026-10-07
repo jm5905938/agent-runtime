@@ -64,7 +64,7 @@ func cloneAgent(agent domain.AgentInstance) domain.AgentInstance {
 }
 
 func cloneResult(result ExecutionResult) ExecutionResult {
-	return ExecutionResult{StateUpdate: cloneMap(result.StateUpdate), Actions: cloneActions(result.Actions)}
+	return ExecutionResult{StateUpdate: cloneMap(result.StateUpdate), Actions: cloneActions(result.Actions), TaskResult: cloneSubagentResult(result.TaskResult)}
 }
 
 func cloneTime(value *time.Time) *time.Time {

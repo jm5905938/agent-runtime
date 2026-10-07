@@ -92,7 +92,7 @@ func (s *Session) Recover(ctx context.Context) (core.RecoveryReport, error) {
 		return core.RecoveryReport{}, err
 	}
 	if orphanEvents != 0 {
-		// 存在没有 Delivery 的孤立 Event，Recovery 不支持这种数据
+		// 存在没有Delivery的孤立Event，Recovery不支持这种数据
 		return core.RecoveryReport{}, ErrRecoveryUnsupported
 	}
 	if err := ctx.Err(); err != nil {

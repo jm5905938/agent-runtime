@@ -17,6 +17,14 @@ func (s *Session) ClaimAction(
 	ctx context.Context,
 	actionID domain.ID,
 ) (*core.ActionClaim, error) {
+	return s.claimAction(ctx, actionID, false)
+}
+
+func (s *Session) ClaimSubagentCancelAction(ctx context.Context, actionID domain.ID) (*core.ActionClaim, error) {
+	return s.claimAction(ctx, actionID, true)
+}
+
+func (s *Session) claimAction(ctx context.Context, actionID domain.ID, cancel bool) (*core.ActionClaim, error) {
 	if err := s.lock(ctx, true); err != nil {
 		return nil, err
 	}
@@ -33,7 +41,6 @@ func (s *Session) ClaimAction(
 		agentID          string
 		handlerVersion   string
 		recoveryPolicy   string
-		idempotencyKey   string
 		maxAttemptsText  string
 		status           string
 		attemptCountText string
@@ -42,7 +49,7 @@ func (s *Session) ClaimAction(
 
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT request_json, agent_id, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id
+		`SELECT request_json, agent_id, handler_version, recovery_policy, max_attempts, status, attempt_count, result_event_id
 		 FROM actions
 		 WHERE id = ?`,
 		string(actionID),
@@ -51,7 +58,6 @@ func (s *Session) ClaimAction(
 		&agentID,
 		&handlerVersion,
 		&recoveryPolicy,
-		&idempotencyKey,
 		&maxAttemptsText,
 		&status,
 		&attemptCountText,
@@ -72,6 +78,23 @@ func (s *Session) ClaimAction(
 	attemptCount, err := strconv.ParseUint(attemptCountText, 10, 64)
 	if err != nil {
 		return nil, err
+	}
+
+	task, err := loadChildSubagentTask(ctx, tx, domain.ID(agentID))
+	if err != nil && !errors.Is(err, core.ErrStoreNotFound) {
+		return nil, err
+	}
+	if cancel {
+		if task == nil || !task.CancelRequested || task.Result != nil {
+			return nil, core.ErrStoreConflict
+		}
+	} else if task != nil {
+		if task.Result != nil {
+			return nil, core.ErrAgentUnavailable
+		}
+		if task.CancelRequested {
+			return nil, core.ErrActionNotReady
+		}
 	}
 
 	currentStatus := domain.ActionStatus(status)
@@ -138,7 +161,6 @@ func (s *Session) ClaimAction(
 		AgentID:        domain.ID(agentID),
 		HandlerVersion: handlerVersion,
 		RecoveryPolicy: policy,
-		IdempotencyKey: idempotencyKey,
 		MaxAttempts:    maxAttempts,
 		Status:         domain.ActionStatusRunning,
 		AttemptCount:   attemptNumber,
@@ -174,7 +196,6 @@ func (s *Session) CompleteAction(
 		agentID          string
 		handlerVersion   string
 		recoveryPolicy   string
-		idempotencyKey   string
 		maxAttemptsText  string
 		status           string
 		attemptCountText string
@@ -185,7 +206,7 @@ func (s *Session) CompleteAction(
 
 	err = tx.QueryRowContext(
 		ctx,
-		`SELECT request_json, agent_id, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
+		`SELECT request_json, agent_id, handler_version, recovery_policy, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
 		 FROM actions
 		 WHERE id = ?`,
 		string(completion.Token.ActionID),
@@ -194,7 +215,6 @@ func (s *Session) CompleteAction(
 		&agentID,
 		&handlerVersion,
 		&recoveryPolicy,
-		&idempotencyKey,
 		&maxAttemptsText,
 		&status,
 		&attemptCountText,
@@ -229,7 +249,6 @@ func (s *Session) CompleteAction(
 		AgentID:        domain.ID(agentID),
 		HandlerVersion: handlerVersion,
 		RecoveryPolicy: domain.RecoveryPolicy(recoveryPolicy),
-		IdempotencyKey: idempotencyKey,
 		MaxAttempts:    maxAttempts,
 		Status:         domain.ActionStatus(status),
 		AttemptCount:   attemptCount,
@@ -252,7 +271,7 @@ func (s *Session) CompleteAction(
 		action.LastError = &failure
 	}
 
-	if err := validateSQLiteActionCompletion(action, completion); err != nil {
+	if err := core.ValidateActionCompletion(action, completion); err != nil {
 		return domain.ActionResult{}, err
 	}
 	if action.AttemptCount != completion.Token.AttemptNumber {
@@ -569,7 +588,6 @@ func (s *Session) LoadAction(
 		agentID          string
 		handlerVersion   string
 		recoveryPolicy   string
-		idempotencyKey   string
 		maxAttemptsText  string
 		status           string
 		attemptCountText string
@@ -580,7 +598,7 @@ func (s *Session) LoadAction(
 
 	err := s.backend.db.QueryRowContext(
 		ctx,
-		`SELECT request_json, agent_id, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
+		`SELECT request_json, agent_id, handler_version, recovery_policy, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
 		 FROM actions
 		 WHERE id = ?`,
 		string(actionID),
@@ -589,7 +607,6 @@ func (s *Session) LoadAction(
 		&agentID,
 		&handlerVersion,
 		&recoveryPolicy,
-		&idempotencyKey,
 		&maxAttemptsText,
 		&status,
 		&attemptCountText,
@@ -623,7 +640,6 @@ func (s *Session) LoadAction(
 		AgentID:        domain.ID(agentID),
 		HandlerVersion: handlerVersion,
 		RecoveryPolicy: domain.RecoveryPolicy(recoveryPolicy),
-		IdempotencyKey: idempotencyKey,
 		MaxAttempts:    maxAttempts,
 		Status:         domain.ActionStatus(status),
 		AttemptCount:   attemptCount,
@@ -742,7 +758,7 @@ func (s *Session) ListActions(
 
 	rows, err := s.backend.db.QueryContext(
 		ctx,
-		`SELECT request_json, agent_id, handler_version, recovery_policy, idempotency_key, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
+		`SELECT request_json, agent_id, handler_version, recovery_policy, max_attempts, status, attempt_count, result_event_id, result_json, last_error_json
 		 FROM actions
 		 ORDER BY sequence`,
 	)
@@ -763,7 +779,6 @@ func (s *Session) ListActions(
 			agentID          string
 			handlerVersion   string
 			recoveryPolicy   string
-			idempotencyKey   string
 			maxAttemptsText  string
 			status           string
 			attemptCountText string
@@ -777,7 +792,6 @@ func (s *Session) ListActions(
 			&agentID,
 			&handlerVersion,
 			&recoveryPolicy,
-			&idempotencyKey,
 			&maxAttemptsText,
 			&status,
 			&attemptCountText,
@@ -807,7 +821,6 @@ func (s *Session) ListActions(
 			AgentID:        domain.ID(agentID),
 			HandlerVersion: handlerVersion,
 			RecoveryPolicy: domain.RecoveryPolicy(recoveryPolicy),
-			IdempotencyKey: idempotencyKey,
 			MaxAttempts:    maxAttempts,
 			Status:         domain.ActionStatus(status),
 			AttemptCount:   attemptCount,
@@ -839,72 +852,6 @@ func (s *Session) ListActions(
 		return nil, err
 	}
 	return actions, nil
-}
-
-func validateSQLiteActionCompletion(
-	action domain.ActionRecord,
-	completion core.ActionCompletion,
-) error {
-	if err := core.ValidateActionMetadata(action); err != nil {
-		return err
-	}
-	result := completion.Result
-	event := completion.Event
-	if err := core.ValidateEvent(event); err != nil {
-		return err
-	}
-	if _, err := codec.Encode(completion); err != nil {
-		return err
-	}
-
-	if result.ActionID != action.Request.ID ||
-		result.EventID != action.ResultEventID ||
-		event.ID != action.ResultEventID ||
-		event.Type != "action.result" ||
-		action.Request.ExecutionID == nil || *action.Request.ExecutionID == "" {
-		return core.ErrStoreConflict
-	}
-
-	if result.Status != domain.ActionStatusSucceeded &&
-		result.Status != domain.ActionStatusFailed {
-		return core.ErrStoreConflict
-	}
-
-	if result.Status == domain.ActionStatusSucceeded && result.Error != nil {
-		return core.ErrStoreConflict
-	}
-
-	if result.Status == domain.ActionStatusFailed && result.Error == nil {
-		return core.ErrStoreConflict
-	}
-	if result.Error != nil {
-		if err := core.ValidateFailure(*result.Error); err != nil {
-			return err
-		}
-	}
-
-	expected := map[string]any{
-		"action_id":    string(action.Request.ID),
-		"action_type":  action.Request.Type,
-		"execution_id": string(*action.Request.ExecutionID),
-		"status":       string(result.Status),
-	}
-
-	if result.Status == domain.ActionStatusSucceeded {
-		expected["result"] = result.Output
-	} else {
-		expected["error"] = result.Error.Message
-	}
-
-	equal, err := core.SameJSONValue(expected, event.Payload)
-	if err != nil {
-		return err
-	}
-	if !equal {
-		return core.ErrStoreConflict
-	}
-
-	return nil
 }
 
 func cloneSQLiteActionResult(

@@ -1,6 +1,7 @@
 package python
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,61 @@ func TestRejectAmbiguousJSON(t *testing.T) {
 			_, err, ok := decodeResponse([]byte(data), input("ok", "attempt"))
 			if err == nil || ok {
 				t.Fatalf("ambiguous response accepted: %s", data)
+			}
+		})
+	}
+}
+
+func TestOptionalSubagentResult(t *testing.T) {
+	for _, task := range []string{
+		``,
+		`,"task_result":{"status":"succeeded","output":{"message":"完成","number":900719925474099312345}}`,
+		`,"task_result":{"status":"failed","output":{},"error":{"kind":"business","message":"任务失败"}}`,
+		`,"task_result":{"status":"cancelled","output":{}}`,
+		`,"task_result":{"status":"cancelled","output":{},"error":{"kind":"interrupted","message":"任务取消"}}`,
+	} {
+		t.Run(task, func(t *testing.T) {
+			data := `{"version":1,"id":"attempt","result":{"state_update":{},"actions":[]` + task + `}}`
+			result, err, valid := decodeResponse([]byte(data), input("ok", "attempt"))
+			if err != nil || !valid {
+				t.Fatalf("task_result响应被拒绝: %v", err)
+			}
+			if task == "" {
+				if result.TaskResult != nil {
+					t.Fatalf("旧响应新增了task_result: %+v", result.TaskResult)
+				}
+				return
+			}
+			if result.TaskResult == nil {
+				t.Fatal("task_result未解码")
+			}
+			if strings.Contains(task, `"number"`) && result.TaskResult.Output["number"] != json.Number("900719925474099312345") {
+				t.Fatalf("任务输出数字失真: %+v", result.TaskResult.Output)
+			}
+		})
+	}
+}
+
+func TestRejectInvalidSubagentResult(t *testing.T) {
+	for _, task := range []string{
+		`null`, `[]`, `{}`, `{"status":"running","output":{}}`,
+		`{"status":true,"output":{}}`, `{"status":"succeeded","output":null}`,
+		`{"status":"succeeded","output":[],"extra":true}`,
+		`{"status":"succeeded","output":{},"error":{"kind":"business","message":"错误"}}`,
+		`{"status":"failed","output":{}}`,
+		`{"status":"failed","output":{},"error":null}`,
+		`{"status":"failed","output":{},"error":{"kind":"other","message":"错误"}}`,
+		`{"status":"failed","output":{},"error":{"kind":"business","message":" "}}`,
+		`{"status":"failed","output":{},"error":{"kind":"business","message":3}}`,
+		`{"status":"failed","output":{},"error":{"kind":"business","message":"错误","extra":true}}`,
+		`{"status":"succeeded","status":"failed","output":{}}`,
+		`{"status":"succeeded","output":{"number":NaN}}`,
+	} {
+		t.Run(task, func(t *testing.T) {
+			data := `{"version":1,"id":"attempt","result":{"state_update":{},"actions":[],"task_result":` + task + `}}`
+			result, err, valid := decodeResponse([]byte(data), input("ok", "attempt"))
+			if err == nil || valid || result.TaskResult != nil || result.StateUpdate != nil || result.Actions != nil {
+				t.Fatalf("非法task_result发布了结果: valid=%v result=%+v err=%v", valid, result, err)
 			}
 		})
 	}

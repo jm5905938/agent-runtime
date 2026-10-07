@@ -16,6 +16,10 @@ import (
 	"testing"
 )
 
+func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io.Writer, open backendOpener) int {
+	return runCommandWithStorage(ctx, args, stdout, stderr, open, nil)
+}
+
 func TestPersistentCommandsRejectMissingBackendOpener(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "not-created")
 	for _, command := range [][]string{
@@ -39,10 +43,14 @@ func TestCommandValidationPrecedesBackendOpen(t *testing.T) {
 	open := func(context.Context, string) (backendHandle, error) { calls++; return backendHandle{}, nil }
 	for _, args := range [][]string{
 		{"--message", string([]byte{0xff})},
-		{"--data-dir", "data"}, {"status"}, {"unknown", "--data-dir", "data"},
+		{"--data-dir", "data"}, {"run"}, {"unknown", "--data-dir", "data"},
 		{"run", "--data-dir", "data", "--agent", "agent"},
 		{"run", "--data-dir", "data", "extra"}, {"init", "--data-dir="},
 		{"init", "--data-dir", "data", "--message="}, {"init", "--data-dir", "data", "--name", " "},
+		{"init", "--data-dir", "data", "--definition", "unknown"},
+		{"init", "--data-dir", "data", "--definition="},
+		{"submit", "--data-dir", "data", "--definition", "main", "--agent", "agent", "--event-id", "event", "--message", "hello"},
+		{"status", "--data-dir", "data", "--env-file", "config"},
 		{"submit", "--data-dir", "data", "--agent", "agent", "--event-id", "event"},
 		{"submit", "--data-dir", "data", "--agent", " ", "--event-id", "event", "--message", "hello"},
 		{"retry", "--data-dir", "data", "--agent", "agent"},
@@ -90,6 +98,34 @@ func TestParseCommandDistinguishesFlagValuesFromCommands(t *testing.T) {
 	if requestedJSON([]string{"--message", "--json"}) || !requestedJSON([]string{"--message=--json", "--json"}) ||
 		requestedJSON([]string{"--json", "status", "--json=false"}) {
 		t.Fatal("json错误格式被普通参数值影响")
+	}
+}
+
+func TestParsePersistentMainOptions(t *testing.T) {
+	for _, args := range [][]string{
+		{"init", "--data-dir", "data", "--definition", "main"},
+		{"--definition=main", "--data-dir=data", "init"},
+	} {
+		options, err := parseCommand(args)
+		if err != nil || options.request.Definition != "main" || options.request.Name != "main" {
+			t.Fatalf("main定义或默认名称不正确: %+v %v", options, err)
+		}
+	}
+	options, err := parseCommand([]string{"init", "--data-dir", "data", "--definition", "main", "--name", "助手"})
+	if err != nil || options.request.Name != "助手" {
+		t.Fatalf("实例名称未保留: %+v %v", options, err)
+	}
+	options, err = parseCommand([]string{"init", "--data-dir", "data"})
+	if err != nil || options.request.Name != "echo" || options.request.Definition != "" {
+		t.Fatalf("默认echo命令改变: %+v %v", options, err)
+	}
+	options, err = parseCommand([]string{"run", "--data-dir", "data", "--env-file", "模型配置"})
+	if err != nil || options.envFile != "模型配置" {
+		t.Fatalf("run没有接受模型配置文件: %+v %v", options, err)
+	}
+	if requestedJSON([]string{"init", "--definition", "--json"}) ||
+		!requestedJSON([]string{"init", "--definition=main", "--json"}) {
+		t.Fatal("definition参数值影响了错误输出格式")
 	}
 }
 

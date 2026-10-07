@@ -64,15 +64,6 @@ func (s *Session) CreateAgent(
 
 	defer s.backend.unlock()
 
-	if err := validateAgent(agent); err != nil {
-		return err
-	}
-
-	stateJSON, err := encodeAgentState(agent.State)
-	if err != nil {
-		return err
-	}
-
 	tx, err := s.backend.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf(
@@ -81,6 +72,25 @@ func (s *Session) CreateAgent(
 		)
 	}
 	defer tx.Rollback()
+
+	if err := createAgentTx(ctx, tx, agent); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create agent: %w", err)
+	}
+	return nil
+}
+
+func createAgentTx(ctx context.Context, tx *sql.Tx, agent domain.AgentInstance) error {
+	if err := validateAgent(agent); err != nil {
+		return err
+	}
+
+	stateJSON, err := encodeAgentState(agent.State)
+	if err != nil {
+		return err
+	}
 
 	var exists int
 	err = tx.QueryRowContext(
@@ -131,13 +141,6 @@ func (s *Session) CreateAgent(
 		)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf(
-			"commit create agent: %w",
-			err,
-		)
-	}
-
 	return nil
 }
 
@@ -150,13 +153,20 @@ func (s *Session) LoadAgent(
 	}
 
 	defer s.backend.unlock()
+	return loadAgent(ctx, s.backend.db, agentID)
+}
 
+type agentReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func loadAgent(ctx context.Context, reader agentReader, agentID domain.ID) (*domain.AgentInstance, error) {
 	var agent domain.AgentInstance
 	var status string
 	var stateJSON string
 	var stateVersion string
 
-	err := s.backend.db.QueryRowContext(ctx, `
+	err := reader.QueryRowContext(ctx, `
 		SELECT
 			id,
 			name,

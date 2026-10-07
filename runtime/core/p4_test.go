@@ -325,7 +325,7 @@ func TestP4EchoResumesAtStoredBoundary(t *testing.T) {
 			action := allActions[0]
 			if len(beforeActions) > 0 {
 				before := beforeActions[0]
-				if !reflect.DeepEqual(action.Request, before.Request) || action.IdempotencyKey != before.IdempotencyKey || action.ResultEventID != before.ResultEventID || action.HandlerVersion != before.HandlerVersion || action.RecoveryPolicy != before.RecoveryPolicy || action.MaxAttempts != before.MaxAttempts {
+				if !reflect.DeepEqual(action.Request, before.Request) || action.ResultEventID != before.ResultEventID || action.HandlerVersion != before.HandlerVersion || action.RecoveryPolicy != before.RecoveryPolicy || action.MaxAttempts != before.MaxAttempts {
 					t.Fatalf("action identity/metadata replaced: before=%+v, after=%+v", before, action)
 				}
 			}

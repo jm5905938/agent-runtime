@@ -43,7 +43,7 @@ func memoryTestAction(claim *ExecutionClaim) domain.ActionRecord {
 	action.BindExecution(claim.Token.ExecutionID)
 	event := domain.NewEvent("action.result", nil)
 	return domain.ActionRecord{Request: action, AgentID: claim.Agent.ID, HandlerVersion: "1",
-		RecoveryPolicy: domain.RecoveryPolicySafeRetry, IdempotencyKey: string(action.ID), MaxAttempts: 3,
+		RecoveryPolicy: domain.RecoveryPolicySafeRetry, MaxAttempts: 3,
 		Status: domain.ActionStatusPending, ResultEventID: event.ID}
 }
 

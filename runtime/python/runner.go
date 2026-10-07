@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,8 @@ type Options struct {
 	Timeout time.Duration
 	//Stderr默认为os.Stderr，自定义写入器必须及时返回
 	Stderr io.Writer
+	// Env覆盖此worker继承的指定环境变量，NewRunner会复制此map。
+	Env map[string]string
 }
 
 // Runner串行调用同一个worker，响应无效、输入输出故障或调用中断时丢弃该worker，后续Run会启动新worker，
@@ -77,13 +80,23 @@ func NewRunner(options Options) (*Runner, error) {
 		options.Python = "python3"
 	}
 	if options.Timeout < 0 {
-		return nil, fmt.Errorf("python runner超时时间必须大于零")
+		return nil, fmt.Errorf("python runner超时时间须大于0")
 	}
 	if options.Timeout == 0 {
 		options.Timeout = DefaultTimeout
 	}
 	if options.Stderr == nil {
 		options.Stderr = os.Stderr
+	}
+	if options.Env != nil {
+		env := make(map[string]string, len(options.Env))
+		for key, value := range options.Env {
+			if key == "" || strings.ContainsAny(key, "=\x00") || strings.ContainsRune(value, '\x00') {
+				return nil, fmt.Errorf("python runner环境变量包含非法字符")
+			}
+			env[key] = value
+		}
+		options.Env = env
 	}
 	if options.SourceDir != "" {
 		path, err := filepath.Abs(options.SourceDir)
@@ -95,7 +108,7 @@ func NewRunner(options Options) (*Runner, error) {
 			return nil, fmt.Errorf("检查python源码目录失败: %w", err)
 		}
 		if !info.IsDir() {
-			return nil, fmt.Errorf("python源码路径必须是目录")
+			return nil, fmt.Errorf("python源码路径须为目录")
 		}
 		options.SourceDir = path
 	}
@@ -225,14 +238,23 @@ func (r *Runner) getWorker() (*worker, error) {
 		return r.worker, nil
 	}
 	cmd := exec.Command(r.options.Python, "-u", "-m", "agent_runtime.worker")
-	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	overrides := make(map[string]string, len(r.options.Env)+2)
+	for key, value := range r.options.Env {
+		overrides[key] = value
+	}
+	overrides["PYTHONDONTWRITEBYTECODE"] = "1"
 	if r.options.SourceDir != "" {
 		path := r.options.SourceDir
-		if previous := os.Getenv("PYTHONPATH"); previous != "" {
+		previous, overridden := overrides["PYTHONPATH"]
+		if !overridden {
+			previous = os.Getenv("PYTHONPATH")
+		}
+		if previous != "" {
 			path += string(os.PathListSeparator) + previous
 		}
-		cmd.Env = append(cmd.Env, "PYTHONPATH="+path)
+		overrides["PYTHONPATH"] = path
 	}
+	cmd.Env = workerEnvironment(os.Environ(), overrides)
 	cmd.Stderr = r.options.Stderr
 	cmd.WaitDelay = time.Second
 	stdin, err := cmd.StdinPipe()
@@ -251,6 +273,25 @@ func (r *Runner) getWorker() (*worker, error) {
 	}
 	r.worker = &worker{cmd: cmd, stdin: stdin, stdout: stdout, reader: bufio.NewReaderSize(stdout, MaxFrameBytes)}
 	return r.worker, nil
+}
+
+func workerEnvironment(inherited []string, overrides map[string]string) []string {
+	environment := make([]string, 0, len(inherited)+len(overrides))
+	for _, value := range inherited {
+		key, _, _ := strings.Cut(value, "=")
+		if _, overridden := overrides[key]; !overridden {
+			environment = append(environment, value)
+		}
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		environment = append(environment, key+"="+overrides[key])
+	}
+	return environment
 }
 
 func (w *worker) stop() {

@@ -178,7 +178,7 @@ func testSessionRecovery(t *testing.T, backend core.RecoveryStore) {
 				t.Fatalf("恢复后execution身份不稳定: %+v", next)
 			}
 			nextAction := claimAction(t, reopened, safe.Request.ID)
-			if nextAction.Token.AttemptNumber != 2 || nextAction.Record.IdempotencyKey != safe.IdempotencyKey ||
+			if nextAction.Token.AttemptNumber != 2 || nextAction.Record.Request.ID != safe.Request.ID ||
 				nextAction.Record.ResultEventID != safe.ResultEventID || nextAction.Record.HandlerVersion != safe.HandlerVersion ||
 				nextAction.Record.RecoveryPolicy != safe.RecoveryPolicy || nextAction.Record.MaxAttempts != safe.MaxAttempts {
 				t.Fatalf("恢复后action固定元数据改变: %+v", nextAction)

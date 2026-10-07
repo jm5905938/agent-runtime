@@ -3,6 +3,7 @@ package main
 import (
 	"agent-runtime/cli"
 	"agent-runtime/core"
+	"agent-runtime/domain"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,20 @@ func writeCommandResult(output io.Writer, result cli.Result) error {
 			submission.Delivery.ExecutionID, submission.Delivery.Status, submission.Duplicate)
 	case "retry":
 		fmt.Fprintf(&text, "agent: %s\nevent: %s\ndelivery: pending\n", result.Retry.AgentID, result.Retry.EventID)
+	case "resolve":
+		receipt := result.Resolution
+		fmt.Fprintf(&text, "action: %s\ndecision: %s\nreason: %s\nagent: %s\nevent: %s\ndelivery: %s\nduplicate: %t\n",
+			receipt.Resolution.ActionID, receipt.Resolution.Decision, receipt.Resolution.Reason,
+			receipt.Delivery.Key.AgentID, receipt.Delivery.Key.EventID, receipt.Delivery.Status, receipt.Duplicate)
+		switch receipt.Delivery.Status {
+		case domain.DeliveryStatusFailed:
+			fmt.Fprintln(&text, "决定处理失败，先用retry重排，再用run继续")
+			fmt.Fprintf(&text, "retry --agent %s --event-id %s\n", receipt.Delivery.Key.AgentID, receipt.Delivery.Key.EventID)
+		case domain.DeliveryStatusCompleted:
+			fmt.Fprintln(&text, "决定已处理，用run继续")
+		default:
+			fmt.Fprintln(&text, "决定已保存，用run继续")
+		}
 	case "status":
 		if result.Query != nil {
 			if err := writeAgentQuery(&text, *result.Query); err != nil {
@@ -93,6 +108,11 @@ func writeAgentQuery(output *strings.Builder, query core.AgentQuery) error {
 		if err := writeJSONValue(output, "action", item.Action); err != nil {
 			return err
 		}
+		if item.Resolution != nil {
+			if err := writeJSONValue(output, "resolution", item.Resolution); err != nil {
+				return err
+			}
+		}
 		fmt.Fprintf(output, "ready: %t\n", item.Ready)
 		for _, attempt := range item.Attempts {
 			if err := writeJSONValue(output, "action_attempt", attempt); err != nil {
@@ -100,6 +120,11 @@ func writeAgentQuery(output *strings.Builder, query core.AgentQuery) error {
 			}
 		}
 		writeBlockReasons(output, item.BlockedBy)
+	}
+	for _, task := range query.Tasks {
+		if err := writeJSONValue(output, "subagent_task", task); err != nil {
+			return err
+		}
 	}
 	return nil
 }

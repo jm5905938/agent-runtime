@@ -21,6 +21,11 @@ const (
 	BlockManualUnknown         QueryBlockCode = "manual_unknown"
 	BlockAttemptsExhausted     QueryBlockCode = "attempts_exhausted"
 	BlockRecoveryRequired      QueryBlockCode = "recovery_required"
+	BlockAgentWaiting          QueryBlockCode = "agent_waiting_result"
+	BlockEarlierInput          QueryBlockCode = "earlier_input_pending"
+	BlockActionResolved        QueryBlockCode = "action_resolved"
+	BlockSubagentWaiting       QueryBlockCode = "subagent_waiting"
+	BlockSubagentCancelling    QueryBlockCode = "subagent_cancelling"
 )
 
 type BlockReason struct {
@@ -29,10 +34,11 @@ type BlockReason struct {
 }
 
 type AgentQuery struct {
-	Agent           AgentSnapshot   `json:"agent"`
-	Deliveries      []DeliveryQuery `json:"deliveries"`
-	Actions         []ActionQuery   `json:"actions"`
-	StartupRecovery RecoveryReport  `json:"startup_recovery"`
+	Agent           AgentSnapshot         `json:"agent"`
+	Deliveries      []DeliveryQuery       `json:"deliveries"`
+	Actions         []ActionQuery         `json:"actions"`
+	StartupRecovery RecoveryReport        `json:"startup_recovery"`
+	Tasks           []domain.SubagentTask `json:"tasks,omitempty"`
 }
 
 type DeliveryQuery struct {
@@ -45,10 +51,11 @@ type DeliveryQuery struct {
 }
 
 type ActionQuery struct {
-	Action    domain.ActionRecord    `json:"action"`
-	Attempts  []domain.ActionAttempt `json:"attempts"`
-	Ready     bool                   `json:"ready"`
-	BlockedBy []BlockReason          `json:"blocked_by"`
+	Action     domain.ActionRecord    `json:"action"`
+	Attempts   []domain.ActionAttempt `json:"attempts"`
+	Ready      bool                   `json:"ready"`
+	BlockedBy  []BlockReason          `json:"blocked_by"`
+	Resolution *ActionResolution      `json:"resolution,omitempty"`
 }
 
 func (r *Runtime) Agents() ([]AgentSnapshot, error) {
@@ -91,6 +98,21 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		Agent: r.queryAgentSnapshot(*agent), Deliveries: make([]DeliveryQuery, 0),
 		Actions: make([]ActionQuery, 0), StartupRecovery: r.RecoveryReport(),
 	}
+	if store, ok := r.store.(SubagentStore); ok {
+		tasks, err := store.ListSubagentTasks(ctx)
+		if err != nil {
+			return AgentQuery{}, err
+		}
+		for _, task := range tasks {
+			if task.ParentAgentID == agentID || task.ChildAgentID == agentID {
+				result.Tasks = append(result.Tasks, cloneSubagentTask(task))
+			}
+		}
+	}
+	cancelled, err := r.subagentCancelled(ctx, agentID)
+	if err != nil {
+		return AgentQuery{}, err
+	}
 	deliveries, err := r.store.ListDeliveries(ctx)
 	if err != nil {
 		return AgentQuery{}, err
@@ -107,12 +129,37 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		running = running || delivery.Status == domain.DeliveryStatusRunning
 		result.Deliveries = append(result.Deliveries, query)
 	}
+	r.mu.Lock()
+	runner := r.definitions[agent.Definition]
+	r.mu.Unlock()
+	var earlier []domain.Event
 	for i := range result.Deliveries {
-		result.Deliveries[i].setReadiness(result.Agent, running)
+		query := &result.Deliveries[i]
+		query.setReadiness(result.Agent, running)
+		if query.Delivery.Status == domain.DeliveryStatusPending {
+			if cancelled {
+				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消中，已停止新工作"})
+			}
+			blocked, err := deliveryBlockedBy(runner, result.Agent, query.Event, earlier)
+			if err != nil {
+				return AgentQuery{}, err
+			}
+			query.BlockedBy = append(query.BlockedBy, blocked...)
+			query.Ready = len(query.BlockedBy) == 0
+		}
+		if query.Delivery.Status == domain.DeliveryStatusPending || query.Delivery.Status == domain.DeliveryStatusRunning {
+			earlier = append(earlier, query.Event)
+		}
 	}
 	actions, err := r.store.ListActions(ctx)
 	if err != nil {
 		return AgentQuery{}, err
+	}
+	resolutionEvents := make(map[domain.ID]domain.Event)
+	for _, delivery := range result.Deliveries {
+		if delivery.Event.Type == ActionResolutionEventType {
+			resolutionEvents[delivery.Event.ID] = delivery.Event
+		}
 	}
 	for _, action := range actions {
 		if action.AgentID != agentID {
@@ -131,7 +178,27 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 			query.Attempts[i] = attempt
 		}
 		sort.Slice(query.Attempts, func(i, j int) bool { return query.Attempts[i].Number < query.Attempts[j].Number })
+		if event, exists := resolutionEvents[actionResolutionEventID(query.Action.Request.ID)]; exists {
+			query.Resolution = resolutionFromEvent(query.Action, event)
+		}
 		r.setActionReadiness(&query, result.Agent)
+		if query.Ready {
+			if cancelled {
+				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消中，已停止新工作"})
+			}
+			handler, err := r.executor.handlerFor(query.Action)
+			if err != nil {
+				return AgentQuery{}, err
+			}
+			if gate, ok := handler.(ActionGate); ok {
+				blocked, err := gate.ActionBlockedBy(ctx, query.Action)
+				if err != nil {
+					return AgentQuery{}, err
+				}
+				query.BlockedBy = append(query.BlockedBy, blocked...)
+			}
+			query.Ready = len(query.BlockedBy) == 0
+		}
 		result.Actions = append(result.Actions, query)
 	}
 	return result, nil
@@ -187,16 +254,20 @@ func (q *DeliveryQuery) setReadiness(agent AgentSnapshot, running bool) {
 			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockDefinitionUnavailable, agent.BindingError})
 		}
 		if running {
-			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockExecutionRunning, "同一agent已有execution进行中"})
+			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockExecutionRunning, "当前agent已有execution执行中"})
 		}
 		if q.Execution != nil && q.Execution.AttemptCount == math.MaxUint64 {
-			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "execution尝试次数已耗尽"})
+			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "execution已达尝试上限"})
 		}
 		q.Ready = len(q.BlockedBy) == 0
 	}
 }
 
 func (r *Runtime) setActionReadiness(q *ActionQuery, agent AgentSnapshot) {
+	if q.Resolution != nil {
+		q.BlockedBy = append(q.BlockedBy, BlockReason{BlockActionResolved, "已保存处理决定，原调用结果仍未知"})
+		return
+	}
 	switch q.Action.Status {
 	case domain.ActionStatusSucceeded, domain.ActionStatusFailed:
 		return
@@ -210,13 +281,13 @@ func (r *Runtime) setActionReadiness(q *ActionQuery, agent AgentSnapshot) {
 		}
 		if q.Action.Status == domain.ActionStatusUnknown {
 			if q.Action.RecoveryPolicy != domain.RecoveryPolicySafeRetry {
-				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockManualUnknown, "action结果未知，保存的恢复策略要求人工处理"})
+				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockManualUnknown, "action结果未知，需手动处理"})
 			} else if r.session == nil {
-				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockRecoveryRequired, "当前runtime没有恢复会话，不会自动重试unknown action"})
+				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockRecoveryRequired, "无恢复会话，无法自动重试未知action"})
 			}
 		}
 		if q.Action.AttemptCount >= q.Action.MaxAttempts {
-			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "action已达到保存的尝试上限"})
+			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "action已达尝试上限"})
 		}
 		q.Ready = len(q.BlockedBy) == 0
 	}

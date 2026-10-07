@@ -27,8 +27,9 @@ type Execution struct {
 }
 
 type ExecutionResult struct {
-	StateUpdate map[string]any `json:"state_update"`
-	Actions     []Action       `json:"actions"`
+	StateUpdate map[string]any  `json:"state_update"`
+	Actions     []Action        `json:"actions"`
+	TaskResult  *SubagentResult `json:"task_result,omitempty"`
 }
 
 // 创建待执行记录

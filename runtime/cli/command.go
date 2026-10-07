@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-var ErrBackendUnavailable = errors.New("当前未配置可用的恢复后端")
+var ErrBackendUnavailable = errors.New("恢复后端未配置")
 
 type UsageError struct {
 	Message string
@@ -23,11 +23,15 @@ type UsageError struct {
 func (e *UsageError) Error() string { return e.Message }
 
 type Request struct {
-	Command string    `json:"command"`
-	AgentID domain.ID `json:"agent_id"`
-	EventID domain.ID `json:"event_id"`
-	Message string    `json:"message"`
-	Name    string    `json:"name"`
+	Command    string                  `json:"command"`
+	AgentID    domain.ID               `json:"agent_id"`
+	EventID    domain.ID               `json:"event_id"`
+	Message    string                  `json:"message"`
+	Name       string                  `json:"name"`
+	Definition string                  `json:"definition,omitempty"`
+	ActionID   domain.ID               `json:"action_id,omitempty"`
+	Decision   core.ResolutionDecision `json:"decision,omitempty"`
+	Reason     string                  `json:"reason,omitempty"`
 }
 
 type Application struct {
@@ -38,14 +42,15 @@ type Application struct {
 }
 
 type Result struct {
-	Command         string               `json:"command"`
-	Agent           *core.AgentSnapshot  `json:"agent,omitempty"`
-	Submission      *Submission          `json:"submission,omitempty"`
-	Retry           *domain.DeliveryKey  `json:"retry,omitempty"`
-	Agents          []core.AgentSnapshot `json:"agents"`
-	Query           *core.AgentQuery     `json:"query,omitempty"`
-	Run             *RunResult           `json:"run,omitempty"`
-	StartupRecovery core.RecoveryReport  `json:"startup_recovery"`
+	Command         string                        `json:"command"`
+	Agent           *core.AgentSnapshot           `json:"agent,omitempty"`
+	Submission      *Submission                   `json:"submission,omitempty"`
+	Retry           *domain.DeliveryKey           `json:"retry,omitempty"`
+	Resolution      *core.ActionResolutionReceipt `json:"resolution,omitempty"`
+	Agents          []core.AgentSnapshot          `json:"agents"`
+	Query           *core.AgentQuery              `json:"query,omitempty"`
+	Run             *RunResult                    `json:"run,omitempty"`
+	StartupRecovery core.RecoveryReport           `json:"startup_recovery"`
 }
 
 type Submission struct {
@@ -69,50 +74,55 @@ type Summary struct {
 
 type CleanupError struct {
 	cause   error
-	cleanup *commandCleanup
+	cleanup *Cleanup
 }
 
 func (e *CleanupError) Error() string { return e.cause.Error() }
 func (e *CleanupError) Unwrap() error { return e.cause }
 func (e *CleanupError) Close(ctx context.Context) error {
-	return e.cleanup.close(ctx)
+	return e.cleanup.Close(ctx)
 }
 
-type commandCleanup struct {
+type Cleanup struct {
 	mu      sync.Mutex
-	runtime interface{ Close(context.Context) error }
-	binding io.Closer
-	backend func() error
+	Runtime interface{ Close(context.Context) error }
+	Binding io.Closer
+	Backend func() error
 }
 
-func (c *commandCleanup) close(ctx context.Context) error {
+func (c *Cleanup) Close(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			err = &CleanupError{cause: err, cleanup: c}
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.runtime != nil {
-		if err := c.runtime.Close(ctx); err != nil {
+	if c.Runtime != nil {
+		if err := c.Runtime.Close(ctx); err != nil {
 			return fmt.Errorf("关闭runtime: %w", err)
 		}
-		c.runtime = nil
+		c.Runtime = nil
 	}
 	var result error
-	if c.binding != nil {
+	if c.Binding != nil {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := c.binding.Close(); err != nil {
+		if err := c.Binding.Close(); err != nil {
 			result = fmt.Errorf("关闭绑定资源: %w", err)
 		} else {
-			c.binding = nil
+			c.Binding = nil
 		}
 	}
-	if c.backend != nil {
+	if c.Backend != nil {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(result, err)
 		}
-		if err := c.backend(); err != nil {
+		if err := c.Backend(); err != nil {
 			result = errors.Join(result, fmt.Errorf("关闭后端: %w", err))
 		} else {
-			c.backend = nil
+			c.Backend = nil
 		}
 	}
 	return result
@@ -125,7 +135,7 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	if a == nil {
 		return Result{}, ErrBackendUnavailable
 	}
-	cleanup := &commandCleanup{backend: a.CloseBackend}
+	cleanup := &Cleanup{Backend: a.CloseBackend}
 	timeout := a.CloseTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -133,9 +143,7 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
-		if closeErr := cleanup.close(closeCtx); closeErr != nil {
-			err = &CleanupError{cause: errors.Join(err, closeErr), cleanup: cleanup}
-		}
+		err = errors.Join(err, cleanup.Close(closeCtx))
 		if err != nil {
 			result = Result{}
 		}
@@ -147,13 +155,13 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	if err != nil {
 		var pending *core.RuntimeOpenError
 		if errors.As(err, &pending) {
-			cleanup.runtime = pending
+			cleanup.Runtime = pending
 		}
 		return Result{}, err
 	}
-	cleanup.runtime = runtime
+	cleanup.Runtime = runtime
 	if a.Bind != nil {
-		cleanup.binding, err = a.Bind(runtime)
+		cleanup.Binding, err = a.Bind(runtime)
 		if err != nil {
 			return Result{}, err
 		}
@@ -161,17 +169,34 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 	result = Result{Command: request.Command, Agents: make([]core.AgentSnapshot, 0), StartupRecovery: runtime.RecoveryReport()}
 	switch request.Command {
 	case "init":
+		definition := domain.DefinitionRef{ID: request.Definition, Version: "1"}
+		if definition.ID == "" {
+			definition.ID = "echo"
+		}
 		name := request.Name
 		if name == "" {
-			name = "echo"
+			name = definition.ID
 		}
-		agent, createErr := runtime.CreateAgentContext(ctx, name, domain.DefinitionRef{ID: "echo", Version: "1"}, nil)
+		agent, createErr := runtime.CreateAgentContext(ctx, name, definition, nil)
 		if createErr != nil {
 			return Result{}, createErr
 		}
 		result.Agent = &agent
 	case "submit":
-		event := domain.Event{ID: request.EventID, Type: "echo.request", Payload: map[string]any{"message": request.Message}, CreatedAt: time.Now().UTC()}
+		agent, loadErr := runtime.AgentContext(ctx, request.AgentID)
+		if loadErr != nil {
+			return Result{}, loadErr
+		}
+		var eventType string
+		switch agent.Definition {
+		case domain.DefinitionRef{ID: "echo", Version: "1"}:
+			eventType = "echo.request"
+		case domain.DefinitionRef{ID: "main", Version: "1"}:
+			eventType = "main.request"
+		default:
+			return Result{}, fmt.Errorf("不支持向definition %s@%s提交消息", agent.Definition.ID, agent.Definition.Version)
+		}
+		event := domain.Event{ID: request.EventID, Type: eventType, Payload: map[string]any{"message": request.Message}, CreatedAt: time.Now().UTC()}
 		received, submitErr := runtime.SubmitContext(ctx, request.AgentID, event)
 		if submitErr != nil {
 			return Result{}, submitErr
@@ -202,6 +227,10 @@ func (a *Application) Execute(ctx context.Context, request Request) (result Resu
 		key := domain.DeliveryKey{AgentID: request.AgentID, EventID: request.EventID}
 		err = runtime.Retry(ctx, key)
 		result.Retry = &key
+	case "resolve":
+		receipt, resolveErr := runtime.ResolveAction(ctx, request.ActionID, request.Decision, request.Reason)
+		err = resolveErr
+		result.Resolution = &receipt
 	}
 	return result, err
 }
@@ -219,7 +248,7 @@ func nilBackend(backend core.RecoveryStore) bool {
 
 func (request Request) Validate() error {
 	invalid := func(message string) error { return &UsageError{Message: message} }
-	for _, value := range []string{request.Command, string(request.AgentID), string(request.EventID), request.Message, request.Name} {
+	for _, value := range []string{request.Command, string(request.AgentID), string(request.EventID), request.Message, request.Name, request.Definition, string(request.ActionID), string(request.Decision), request.Reason} {
 		if !utf8.ValidString(value) {
 			return invalid("命令参数必须是有效UTF-8文本")
 		}
@@ -227,10 +256,19 @@ func (request Request) Validate() error {
 	if request.AgentID != "" && strings.TrimSpace(string(request.AgentID)) == "" || request.EventID != "" && strings.TrimSpace(string(request.EventID)) == "" {
 		return invalid("agent_id和event_id不能仅含空白")
 	}
+	if request.Command != "init" && request.Definition != "" {
+		return invalid("definition仅适用于init")
+	}
+	if request.Command != "resolve" && (request.ActionID != "" || request.Decision != "" || request.Reason != "") {
+		return invalid("action_id、decision和reason仅适用于resolve")
+	}
 	switch request.Command {
 	case "init":
 		if request.AgentID != "" || request.EventID != "" || request.Message != "" || request.Name != "" && strings.TrimSpace(request.Name) == "" {
-			return invalid("init仅接受非空白name")
+			return invalid("init仅接受definition和非空白name")
+		}
+		if request.Definition != "" && request.Definition != "echo" && request.Definition != "main" {
+			return invalid(fmt.Sprintf("不支持的definition %q，仅支持echo或main", request.Definition))
 		}
 	case "submit":
 		if request.AgentID == "" || request.EventID == "" || request.Name != "" {
@@ -247,6 +285,16 @@ func (request Request) Validate() error {
 	case "retry":
 		if request.AgentID == "" || request.EventID == "" || request.Message != "" || request.Name != "" {
 			return invalid("retry仅接受必填的agent_id和event_id")
+		}
+	case "resolve":
+		if strings.TrimSpace(string(request.ActionID)) == "" || request.AgentID != "" || request.EventID != "" || request.Message != "" || request.Name != "" {
+			return invalid("resolve需要action_id，仅接受decision和reason")
+		}
+		if request.Decision != core.ResolutionRetry && request.Decision != core.ResolutionAbandon {
+			return invalid("resolve的decision仅支持retry或abandon")
+		}
+		if strings.TrimSpace(request.Reason) == "" || utf8.RuneCountInString(request.Reason) > 1024 {
+			return invalid("reason须为非空文本，最多1024字符")
 		}
 	default:
 		return invalid(fmt.Sprintf("未知命令%q", request.Command))

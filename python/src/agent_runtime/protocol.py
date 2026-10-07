@@ -75,9 +75,14 @@ def _encode(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
-def encode_frame(value: object) -> bytes:
+def json_text(value: object) -> str:
+    """保留协议中的无损Decimal数字。"""
     validate_json(value)
-    frame = (_encode(value) + "\n").encode("utf-8")
+    return _encode(value)
+
+
+def encode_frame(value: object) -> bytes:
+    frame = (json_text(value) + "\n").encode("utf-8")
     if len(frame) > MAX_FRAME_BYTES:
         raise ProtocolError("响应超过最大帧长度")
     return frame
@@ -225,5 +230,22 @@ def result_to_wire(result: ExecutionResult, context: ExecutionContext) -> dict:
             record["execution_id"] = action.execution_id
         actions.append(record)
     wire = {"state_update": result.state_update, "actions": actions}
+    if result.task_result is not None:
+        task = _object(result.task_result, "task_result", {"status", "output"}, {"error"})
+        if task["status"] not in ("succeeded", "failed", "cancelled"):
+            raise ProtocolError("task_result需要最终status")
+        if type(task["output"]) is not dict:
+            raise ProtocolError("task_result.output必须是对象")
+        if task["status"] == "failed" and "error" not in task:
+            raise ProtocolError("失败的task_result需要error")
+        if "error" in task:
+            if task["status"] == "succeeded":
+                raise ProtocolError("成功的task_result不能包含error")
+            problem = _object(task["error"], "task_result.error", {"kind", "message"})
+            if problem["kind"] not in ("business", "runtime", "interrupted", "unknown"):
+                raise ProtocolError("task_result.error类别无效")
+            if not _text(problem["message"], "task_result.error.message").strip():
+                raise ProtocolError("task_result.error.message需要非空字符串")
+        wire["task_result"] = task
     validate_json(wire)
     return wire

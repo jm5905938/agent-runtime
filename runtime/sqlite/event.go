@@ -31,10 +31,21 @@ func (s *Session) ReceiveEvent(
 		return core.ReceivedEvent{}, err
 	}
 	defer tx.Rollback()
+	received, err := receiveEvent(ctx, tx, agentID, event)
+	if err != nil {
+		return core.ReceivedEvent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return core.ReceivedEvent{}, err
+	}
+	return received, nil
+}
 
+// receiveEvent只在调用方拥有的IMMEDIATE事务内操作，复用于执行会话与输入通道。
+func receiveEvent(ctx context.Context, tx *sql.Tx, agentID domain.ID, event domain.Event) (core.ReceivedEvent, error) {
 	// agent是否存在
 	var exists int
-	err = tx.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		`SELECT 1 FROM agents WHERE id = ?`,
 		string(agentID),
@@ -140,9 +151,6 @@ func (s *Session) ReceiveEvent(
 
 	if deliveryErr == nil {
 		// 已存在
-		if err := tx.Commit(); err != nil {
-			return core.ReceivedEvent{}, err
-		}
 		return core.ReceivedEvent{
 			Delivery: domain.Delivery{
 				Key:         domain.DeliveryKey{AgentID: agentID, EventID: event.ID},
@@ -209,10 +217,6 @@ func (s *Session) ReceiveEvent(
 		return core.ReceivedEvent{}, execErr
 	}
 
-	if err := tx.Commit(); err != nil {
-		return core.ReceivedEvent{}, err
-	}
-
 	return core.ReceivedEvent{
 		Delivery: domain.Delivery{
 			Key:         domain.DeliveryKey{AgentID: agentID, EventID: event.ID},
@@ -258,7 +262,7 @@ func (s *Session) LoadDelivery(
 	}, nil
 }
 
-// 选deliveries，按 receive_seq排列
+// 选deliveries，按receive_seq排列
 func (s *Session) ListDeliveries(
 	ctx context.Context,
 	statuses ...domain.DeliveryStatus,

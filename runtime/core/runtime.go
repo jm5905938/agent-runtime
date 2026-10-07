@@ -16,25 +16,27 @@ var (
 	ErrDeliveryFailed      = errors.New("delivery失败，需要显式重试")
 	ErrAgentUnavailable    = errors.New("agent不可用")
 	ErrExecutionFailed     = errors.New("execution失败")
+	ErrDeliveryNotReady    = errors.New("delivery暂时不能执行")
 )
 
 // 事件、action、结果事件的执行闭环
 type Runtime struct {
-	store       StateStore
-	lifecycle   LifecycleManager
-	executor    *Executor
-	mu          sync.Mutex
-	definitions map[domain.DefinitionRef]AgentRunner
-	drain       chan struct{}
-	session     RecoverySession
-	recovery    RecoveryReport
-	lifeMu      sync.Mutex
-	stopping    bool
-	closed      bool
-	inflight    int
-	stop        chan struct{}
-	drained     chan struct{}
-	closeGate   chan struct{}
+	store          StateStore
+	lifecycle      LifecycleManager
+	executor       *Executor
+	mu             sync.Mutex
+	definitions    map[domain.DefinitionRef]AgentRunner
+	executionGates map[domain.ID]*sync.Mutex
+	drain          chan struct{}
+	session        RecoverySession
+	recovery       RecoveryReport
+	lifeMu         sync.Mutex
+	stopping       bool
+	closed         bool
+	inflight       int
+	stop           chan struct{}
+	drained        chan struct{}
+	closeGate      chan struct{}
 }
 
 func NewRuntime() *Runtime {
@@ -42,7 +44,7 @@ func NewRuntime() *Runtime {
 }
 
 func NewRuntimeWithStore(store StateStore) (*Runtime, error) {
-	if store == nil || isNilValue(store) {
+	if isNilValue(store) {
 		return nil, fmt.Errorf("创建runtime: store不能为空")
 	}
 	if _, session := store.(RecoverySession); session {
@@ -52,7 +54,7 @@ func NewRuntimeWithStore(store StateStore) (*Runtime, error) {
 }
 
 func newRuntime(store StateStore) *Runtime {
-	runtime := &Runtime{store: store, executor: NewExecutor(), definitions: make(map[domain.DefinitionRef]AgentRunner),
+	runtime := &Runtime{store: store, executor: NewExecutor(), definitions: make(map[domain.DefinitionRef]AgentRunner), executionGates: make(map[domain.ID]*sync.Mutex),
 		drain: make(chan struct{}, 1), stop: make(chan struct{}), drained: make(chan struct{}), closeGate: make(chan struct{}, 1)}
 	runtime.drain <- struct{}{}
 	runtime.closeGate <- struct{}{}
@@ -61,6 +63,9 @@ func newRuntime(store StateStore) *Runtime {
 }
 
 func isNilValue(value any) bool {
+	if value == nil {
+		return true
+	}
 	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
@@ -79,7 +84,7 @@ func (r *Runtime) Register(agent *domain.AgentInstance, runner AgentRunner) erro
 		return err
 	}
 	defer done()
-	if agent == nil || nilRunner(runner) {
+	if agent == nil || isNilValue(runner) {
 		return fmt.Errorf("注册agent: agent和runner不能为空")
 	}
 	r.mu.Lock()
@@ -156,23 +161,8 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	if err != nil {
 		return ExecutionResult{}, &storeFailureError{cause: err}
 	}
-	switch delivery.Status {
-	case domain.DeliveryStatusCompleted:
-		saved, err := r.store.LoadExecution(ctx, delivery.ExecutionID)
-		if err != nil {
-			return ExecutionResult{}, &storeFailureError{cause: err}
-		}
-		if saved.Execution.Result == nil {
-			return ExecutionResult{}, fmt.Errorf("已完成execution %s缺少结果", delivery.ExecutionID)
-		}
-		return cloneResult(*saved.Execution.Result), nil
-	case domain.DeliveryStatusRunning:
-		return ExecutionResult{}, ErrExecutionInProgress
-	case domain.DeliveryStatusFailed:
-		return ExecutionResult{}, ErrDeliveryFailed
-	case domain.DeliveryStatusPending:
-	default:
-		return ExecutionResult{}, fmt.Errorf("投递状态无效%q", delivery.Status)
+	if delivery.Status != domain.DeliveryStatusPending {
+		return r.nonPendingDeliveryResult(ctx, *delivery)
 	}
 	agent, err := r.store.LoadAgent(ctx, key.AgentID)
 	if err != nil {
@@ -181,12 +171,67 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	if agent.Status != domain.AgentStatusActive {
 		return ExecutionResult{}, fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
 	}
+	if cancelled, err := r.subagentCancelled(ctx, agent.ID); err != nil {
+		return ExecutionResult{}, &storeFailureError{cause: err}
+	} else if cancelled {
+		return ExecutionResult{}, ErrDeliveryNotReady
+	}
 	r.mu.Lock()
 	runner := r.definitions[agent.Definition]
 	err = r.bindingError(agent.Definition)
 	r.mu.Unlock()
 	if err != nil {
 		return ExecutionResult{}, err
+	}
+	if _, gated := runner.(DeliveryGate); gated {
+		// 门控检查、领取和提交串行化，防止使用另一轮提交前的旧状态。
+		gate := r.executionGate(key.AgentID)
+		if !gate.TryLock() {
+			return ExecutionResult{}, ErrExecutionInProgress
+		}
+		defer gate.Unlock()
+		// 首次读取与拿锁之间，同一投递可能已经完成。
+		delivery, err = r.store.LoadDelivery(ctx, key)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if delivery.Status != domain.DeliveryStatusPending {
+			return r.nonPendingDeliveryResult(ctx, *delivery)
+		}
+		agent, err = r.store.LoadAgent(ctx, key.AgentID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if agent.Status != domain.AgentStatusActive {
+			return ExecutionResult{}, fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
+		}
+		event, err := r.store.LoadEvent(ctx, key.EventID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		earlier, err := r.earlierEvents(ctx, key)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		blocked, err := deliveryBlockedBy(runner, snapshotAgent(*agent), *event, earlier)
+		if err != nil {
+			return ExecutionResult{}, err
+		}
+		if len(blocked) > 0 {
+			return ExecutionResult{}, &deliveryNotReadyError{blocked: blocked}
+		}
+	}
+	if _, ok := runner.(DeliveryPreparer); ok {
+		event, err := r.store.LoadEvent(ctx, key.EventID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if err := prepareDelivery(ctx, runner, snapshotAgent(*agent), *event); err != nil {
+			return ExecutionResult{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return ExecutionResult{}, err
+		}
 	}
 	claim, err := r.store.ClaimExecution(ctx, key)
 	if err != nil {
@@ -213,7 +258,7 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 		return ExecutionResult{}, r.failExecution(ctx, claim.Token, domain.ErrorKindRuntime, err)
 	}
 	committed, err := r.store.CommitExecution(ctx, ExecutionCommit{
-		Token: claim.Token, StateUpdate: cloneMap(result.StateUpdate), Actions: actions,
+		Token: claim.Token, StateUpdate: cloneMap(result.StateUpdate), Actions: actions, TaskResult: cloneSubagentResult(result.TaskResult),
 	})
 	if err != nil {
 		//提交报错也可能已生效，不能改记失败
@@ -222,7 +267,30 @@ func (r *Runtime) processDelivery(ctx context.Context, key domain.DeliveryKey) (
 	return cloneResult(committed), nil
 }
 
+func (r *Runtime) nonPendingDeliveryResult(ctx context.Context, delivery domain.Delivery) (ExecutionResult, error) {
+	switch delivery.Status {
+	case domain.DeliveryStatusCompleted:
+		saved, err := r.store.LoadExecution(ctx, delivery.ExecutionID)
+		if err != nil {
+			return ExecutionResult{}, &storeFailureError{cause: err}
+		}
+		if saved.Execution.Result == nil {
+			return ExecutionResult{}, fmt.Errorf("已完成execution %s缺少结果", delivery.ExecutionID)
+		}
+		return cloneResult(*saved.Execution.Result), nil
+	case domain.DeliveryStatusRunning:
+		return ExecutionResult{}, ErrExecutionInProgress
+	case domain.DeliveryStatusFailed:
+		return ExecutionResult{}, ErrDeliveryFailed
+	default:
+		return ExecutionResult{}, fmt.Errorf("投递状态无效%q", delivery.Status)
+	}
+}
+
 func (r *Runtime) resolveClaimError(ctx context.Context, key domain.DeliveryKey, cause error) (ExecutionResult, error) {
+	if errors.Is(cause, ErrDeliveryNotReady) {
+		return ExecutionResult{}, cause
+	}
 	if !errors.Is(cause, ErrStoreConflict) && !errors.Is(cause, ErrStoreStaleClaim) &&
 		!errors.Is(cause, ErrExecutionInProgress) && !errors.Is(cause, ErrDeliveryFailed) && !errors.Is(cause, ErrAgentUnavailable) {
 		return ExecutionResult{}, &storeFailureError{cause: cause}
@@ -354,6 +422,29 @@ func (r *Runtime) RunUntilIdle() error {
 }
 
 func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
+	return r.runUntilIdleContext(ctx, "")
+}
+
+// 只推进指定agent的事件和action，保留其他agent的待处理工作。
+func (r *Runtime) RunAgentUntilIdleContext(ctx context.Context, agentID domain.ID) error {
+	if agentID == "" {
+		return fmt.Errorf("推进agent: agent id不能为空")
+	}
+	return r.runUntilIdleContext(ctx, agentID)
+}
+
+func (r *Runtime) runUntilIdleContext(ctx context.Context, agentID domain.ID) error {
+	return r.runScopedUntilIdleContext(ctx, agentID, false)
+}
+
+func (r *Runtime) RunAgentTreeUntilIdleContext(ctx context.Context, agentID domain.ID) error {
+	if agentID == "" {
+		return fmt.Errorf("推进agent任务树: agent id不能为空")
+	}
+	return r.runScopedUntilIdleContext(ctx, agentID, true)
+}
+
+func (r *Runtime) runScopedUntilIdleContext(ctx context.Context, agentID domain.ID, tree bool) error {
 	done, err := r.enter()
 	if err != nil {
 		return err
@@ -367,6 +458,15 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 	case <-r.drain:
 	}
 	defer func() { r.drain <- struct{}{} }()
+	if agentID != "" {
+		agent, err := r.store.LoadAgent(ctx, agentID)
+		if err != nil {
+			return err
+		}
+		if agent.Status != domain.AgentStatusActive {
+			return fmt.Errorf("%w: agent %s当前状态%s", ErrAgentUnavailable, agent.ID, agent.Status)
+		}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -374,12 +474,44 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 		if r.isStopping() {
 			return nil
 		}
+		var scope map[domain.ID]bool
+		if agentID != "" {
+			scope = map[domain.ID]bool{agentID: true}
+			if tree {
+				ids, err := r.AgentTreeContext(ctx, agentID)
+				if err != nil {
+					return err
+				}
+				for _, id := range ids {
+					scope[id] = true
+				}
+			}
+		}
+		progress := false
+		if store, ok := r.store.(SubagentStore); ok {
+			tasks, err := store.ListSubagentTasks(ctx)
+			if err != nil {
+				return err
+			}
+			for _, task := range tasks {
+				if !task.CancelRequested || task.Result != nil || scope != nil && !scope[task.ChildAgentID] {
+					continue
+				}
+				finished, err := r.settleSubagentCancel(ctx, task)
+				if err != nil {
+					return err
+				}
+				progress = progress || finished
+			}
+		}
 		deliveries, err := r.store.ListDeliveries(ctx, domain.DeliveryStatusPending)
 		if err != nil {
 			return err
 		}
-		progress := false
 		for _, delivery := range deliveries {
+			if scope != nil && !scope[delivery.Key.AgentID] {
+				continue
+			}
 			if r.isStopping() {
 				return nil
 			}
@@ -391,7 +523,7 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 				return err
 			case err == nil, executionFailure:
 				progress = true
-			case errors.Is(err, ErrExecutionInProgress), errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeliveryFailed):
+			case errors.Is(err, ErrExecutionInProgress), errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeliveryFailed), errors.Is(err, ErrDeliveryNotReady):
 				continue
 			default:
 				return err
@@ -406,6 +538,9 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 			return err
 		}
 		for _, action := range actions {
+			if scope != nil && !scope[action.AgentID] {
+				continue
+			}
 			if r.isStopping() {
 				return nil
 			}
@@ -417,7 +552,7 @@ func (r *Runtime) RunUntilIdleContext(ctx context.Context) error {
 				if _, storageFailure := err.(*storeFailureError); storageFailure {
 					return err
 				}
-				if errors.Is(err, ErrAgentUnavailable) || errors.Is(err, ErrHandlerUnavailable) || errors.Is(err, ErrExecutionInProgress) {
+				if errors.Is(err, ErrAgentUnavailable) || errors.Is(err, ErrHandlerUnavailable) || errors.Is(err, ErrExecutionInProgress) || errors.Is(err, ErrActionNotReady) {
 					continue
 				}
 				return err

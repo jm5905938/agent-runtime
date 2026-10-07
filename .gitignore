@@ -1,0 +1,6 @@
+.agent-runtime/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.exe

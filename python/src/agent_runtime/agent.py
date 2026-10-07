@@ -59,6 +59,7 @@ class Action:
 class ExecutionResult:
     state_update: JSONObject = field(default_factory=dict)
     actions: list[Action] = field(default_factory=list)
+    task_result: JSONObject | None = None
 
 
 class Runner(Protocol):

@@ -64,11 +64,28 @@ func Open(path string) (backend *Backend, err error) {
 		}
 	}()
 
+	db, err = openDatabase(context.Background(), absolute, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := runMigrations(context.Background(), db); err != nil {
+		return nil, fmt.Errorf("迁移sqlite: %w", err)
+	}
+	backend = &Backend{db: db, path: absolute, gate: make(chan struct{}, 1)}
+	backend.unlock()
+	return backend, nil
+}
+
+// DSN中的pragma确保连接池更换连接后仍保留同样的事务和外键配置。
+func openDatabase(ctx context.Context, absolute, mode string) (*sql.DB, error) {
 	query := url.Values{}
 	query.Add("_pragma", "foreign_keys(1)")
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "synchronous(NORMAL)")
 	query.Set("_txlock", "immediate")
+	if mode != "" {
+		query.Set("mode", mode)
+	}
 	dsnPath := filepath.ToSlash(absolute)
 
 	if filepath.VolumeName(absolute) != "" &&
@@ -82,19 +99,14 @@ func Open(path string) (backend *Backend, err error) {
 		RawQuery: query.Encode(),
 	}).String()
 
-	db, err = sql.Open(Name, dsn)
+	db, err := sql.Open(Name, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("连接sqlite: %w", err)
+	if err := db.PingContext(ctx); err != nil {
+		return nil, errors.Join(fmt.Errorf("连接sqlite: %w", err), db.Close())
 	}
-	if err := runMigrations(context.Background(), db); err != nil {
-		return nil, fmt.Errorf("迁移sqlite: %w", err)
-	}
-	backend = &Backend{db: db, path: absolute, gate: make(chan struct{}, 1)}
-	backend.unlock()
-	return backend, nil
+	return db, nil
 }

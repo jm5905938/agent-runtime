@@ -293,9 +293,14 @@ func TestStorageFailuresReturnErrorsAndReleaseOwnership(t *testing.T) {
 func TestApplicationRejectsInvalidRequestsBeforeOpeningBackend(t *testing.T) {
 	requests := []Request{
 		{}, {Command: "other"}, {Command: "init", AgentID: "agent"}, {Command: "init", Name: " "},
+		{Command: "init", Definition: "unknown"}, {Command: "init", Definition: " "}, {Command: "init", Definition: "main@1"},
+		{Command: "init", Definition: string([]byte{0xff})},
 		{Command: "submit", AgentID: "agent"}, {Command: "submit", EventID: "event"},
+		{Command: "submit", AgentID: "agent", EventID: "event", Definition: "main"},
 		{Command: "run", AgentID: "agent"}, {Command: "status", EventID: "event"},
+		{Command: "run", Definition: "main"}, {Command: "status", Definition: "main"},
 		{Command: "retry", AgentID: "agent"}, {Command: "retry", AgentID: "agent", EventID: "event", Message: "message"},
+		{Command: "retry", AgentID: "agent", EventID: "event", Definition: "main"},
 		{Command: "status", AgentID: " "}, {Command: "init", Name: string([]byte{0xff})},
 	}
 	for _, request := range requests {

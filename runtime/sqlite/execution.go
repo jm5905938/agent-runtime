@@ -262,6 +262,14 @@ func (s *Session) ClaimExecution(
 		return nil, core.ErrAgentUnavailable
 	}
 
+	task, err := loadChildSubagentTask(ctx, tx, key.AgentID)
+	if err != nil && !errors.Is(err, core.ErrStoreNotFound) {
+		return nil, err
+	}
+	if task != nil && task.CancelRequested && task.Result == nil {
+		return nil, core.ErrDeliveryNotReady
+	}
+
 	// 检查running delivery
 	var runningCount int
 	err = tx.QueryRowContext(
@@ -513,6 +521,17 @@ func (s *Session) CommitExecution(
 	}
 	defer tx.Rollback()
 
+	result, err := commitExecutionTx(ctx, tx, commit)
+	if err != nil {
+		return domain.ExecutionResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.ExecutionResult{}, err
+	}
+	return result, nil
+}
+
+func commitExecutionTx(ctx context.Context, tx *sql.Tx, commit core.ExecutionCommit) (domain.ExecutionResult, error) {
 	token := commit.Token
 
 	// 校验delivery
@@ -520,7 +539,7 @@ func (s *Session) CommitExecution(
 		deliveryExecutionID string
 		deliveryStatus      string
 	)
-	err = tx.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		`SELECT execution_id, status
 		 FROM deliveries
@@ -636,6 +655,28 @@ func (s *Session) CommitExecution(
 	}); err != nil {
 		return domain.ExecutionResult{}, err
 	}
+	var task *domain.SubagentTask
+	if commit.TaskResult != nil {
+		if err := core.ValidateSubagentResult(commit.TaskResult); err != nil {
+			return domain.ExecutionResult{}, err
+		}
+		if len(commit.Actions) != 0 {
+			return domain.ExecutionResult{}, fmt.Errorf("subagent完成时不能新增action: %w", core.ErrStoreConflict)
+		}
+		task, err = loadChildSubagentTask(ctx, tx, token.Delivery.AgentID)
+		if err != nil {
+			if errors.Is(err, core.ErrStoreNotFound) {
+				return domain.ExecutionResult{}, fmt.Errorf("subagent完成关联无效: %w", core.ErrStoreConflict)
+			}
+			return domain.ExecutionResult{}, err
+		}
+		if task.Result != nil {
+			return domain.ExecutionResult{}, core.ErrStoreConflict
+		}
+		if err := subagentCanFinish(ctx, tx, task.ChildAgentID, token.ExecutionID); err != nil {
+			return domain.ExecutionResult{}, err
+		}
+	}
 
 	// 解码state
 	var currentState map[string]any
@@ -693,6 +734,7 @@ func (s *Session) CommitExecution(
 	result := domain.ExecutionResult{
 		StateUpdate: commit.StateUpdate,
 		Actions:     actionRequests,
+		TaskResult:  commit.TaskResult,
 	}
 
 	resultJSON, err := codec.Encode(result)
@@ -718,7 +760,7 @@ func (s *Session) CommitExecution(
 			string(requestJSON),
 			action.HandlerVersion,
 			string(action.RecoveryPolicy),
-			action.IdempotencyKey,
+			string(action.Request.ID),
 			strconv.FormatUint(action.MaxAttempts, 10),
 			string(domain.ActionStatusPending),
 			"0",
@@ -773,8 +815,10 @@ func (s *Session) CommitExecution(
 		return domain.ExecutionResult{}, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return domain.ExecutionResult{}, err
+	if task != nil {
+		if err := finishSubagentTaskTx(ctx, tx, task, token.ExecutionID, *commit.TaskResult); err != nil {
+			return domain.ExecutionResult{}, err
+		}
 	}
 
 	var storedResult domain.ExecutionResult
@@ -832,6 +876,13 @@ func (s *Session) FailExecution(
 	}
 	defer tx.Rollback()
 
+	if err := failExecutionTx(ctx, tx, failure); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func failExecutionTx(ctx context.Context, tx *sql.Tx, failure core.ExecutionFailure) error {
 	token := failure.Token
 
 	// 校验delivery
@@ -840,7 +891,7 @@ func (s *Session) FailExecution(
 		deliveryStatus      string
 	)
 
-	err = tx.QueryRowContext(
+	err := tx.QueryRowContext(
 		ctx,
 		`SELECT execution_id, status
 		 FROM deliveries
@@ -935,6 +986,18 @@ func (s *Session) FailExecution(
 	if err := core.ValidateFailure(failure.Failure); err != nil {
 		return err
 	}
+	var task *domain.SubagentTask
+	if !failure.Interrupted {
+		task, err = loadChildSubagentTask(ctx, tx, token.Delivery.AgentID)
+		if err != nil && !errors.Is(err, core.ErrStoreNotFound) {
+			return err
+		}
+		if task != nil {
+			if err := subagentCanFinish(ctx, tx, task.ChildAgentID, token.ExecutionID); err != nil {
+				return err
+			}
+		}
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
@@ -992,8 +1055,11 @@ func (s *Session) FailExecution(
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
+	if task != nil {
+		result := domain.SubagentResult{Status: domain.SubagentStatusFailed, Output: map[string]any{}, Error: &failure.Failure}
+		if err := finishSubagentTaskTx(ctx, tx, task, token.ExecutionID, result); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1030,6 +1096,14 @@ func (s *Session) RequeueDelivery(
 	}
 
 	if status != string(domain.DeliveryStatusFailed) {
+		return core.ErrStoreConflict
+	}
+
+	task, err := loadChildSubagentTask(ctx, tx, key.AgentID)
+	if err != nil && !errors.Is(err, core.ErrStoreNotFound) {
+		return err
+	}
+	if task != nil && task.Result != nil {
 		return core.ErrStoreConflict
 	}
 

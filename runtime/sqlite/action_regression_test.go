@@ -34,7 +34,7 @@ func newActionRegressionFixture(t *testing.T) (*Session, *core.ActionClaim) {
 	request.ID = "action-regression"
 	request.BindExecution(execution.Token.ExecutionID)
 	action := domain.ActionRecord{Request: request, AgentID: agent.ID, HandlerVersion: "1", RecoveryPolicy: domain.RecoveryPolicySafeRetry,
-		IdempotencyKey: string(request.ID), MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: "result-regression"}
+		MaxAttempts: 2, Status: domain.ActionStatusPending, ResultEventID: "result-regression"}
 	if _, err := session.CommitExecution(ctx, core.ExecutionCommit{Token: execution.Token, Actions: []domain.ActionRecord{action}}); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +52,45 @@ func actionRegressionCompletion(claim *core.ActionClaim) core.ActionCompletion {
 		Event: domain.Event{ID: claim.Record.ResultEventID, Type: "action.result", CreatedAt: time.Now().UTC(),
 			Payload: map[string]any{"action_id": string(claim.Record.Request.ID), "action_type": claim.Record.Request.Type,
 				"execution_id": string(*claim.Record.Request.ExecutionID), "status": "succeeded", "result": output}}}
+}
+
+func TestLegacyIdempotencyColumnPreservesActionIdentityOnRecovery(t *testing.T) {
+	ctx := context.Background()
+	session, claim := newActionRegressionFixture(t)
+	backend := session.backend
+	var key string
+	if err := backend.db.QueryRowContext(ctx, `SELECT idempotency_key FROM actions WHERE id = ?`, claim.Record.Request.ID).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if key != string(claim.Record.Request.ID) {
+		t.Fatalf("兼容列未使用action id: %q", key)
+	}
+	if _, err := backend.db.ExecContext(ctx, `UPDATE actions SET idempotency_key = ? WHERE id = ?`, "legacy-provider-key", claim.Record.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openTestSession(t, backend)
+	if _, err := reopened.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := reopened.ClaimAction(ctx, claim.Record.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Token.AttemptNumber != 2 || !reflect.DeepEqual(retried.Record.Request, claim.Record.Request) || retried.Record.ResultEventID != claim.Record.ResultEventID {
+		t.Fatalf("旧数据库恢复改变了action身份: %+v", retried)
+	}
+	if _, err := reopened.CompleteAction(ctx, actionRegressionCompletion(retried)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.db.QueryRowContext(ctx, `SELECT idempotency_key FROM actions WHERE id = ?`, claim.Record.Request.ID).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if key != "legacy-provider-key" {
+		t.Fatalf("恢复覆盖了旧数据库兼容列: %q", key)
+	}
 }
 
 func TestActionAttemptOrderFullUint64(t *testing.T) {

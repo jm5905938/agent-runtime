@@ -130,7 +130,7 @@ func TestCommitExecution(t *testing.T) {
 		t.Fatalf("result count mismatch: %v", result.StateUpdate["count"])
 	}
 
-	// 读 agent，确认 state 和版本
+	// 读agent，确认state和版本
 	loaded, err := session.LoadAgent(ctx, agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestCommitExecution(t *testing.T) {
 		t.Fatalf("state count mismatch: %v", loaded.State["count"])
 	}
 
-	// 读 delivery，确认 completed
+	// 读delivery，确认completed
 	delivery, err := session.LoadDelivery(ctx, key)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestCommitExecution(t *testing.T) {
 		t.Fatalf("delivery status mismatch: %s", delivery.Status)
 	}
 
-	// 读 execution，确认 completed、有结果
+	// 读execution，确认completed、有结果
 	stored, err := session.LoadExecution(ctx, claim.Token.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +217,7 @@ func TestFailExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// delivery 应该是 failed
+	// delivery应该是failed
 	delivery, err := session.LoadDelivery(ctx, key)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestFailExecution(t *testing.T) {
 		t.Fatalf("delivery status mismatch: %s", delivery.Status)
 	}
 
-	// execution 应该是 failed
+	// execution应该是failed
 	stored, err := session.LoadExecution(ctx, claim.Token.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestFailExecution(t *testing.T) {
 		t.Fatalf("execution error mismatch: %s", stored.Execution.Error)
 	}
 
-	// attempt 应该是 failed，有 failure
+	// attempt应该是failed，有failure
 	if len(stored.Attempts) != 1 {
 		t.Fatalf("attempt count mismatch: %d", len(stored.Attempts))
 	}
@@ -283,7 +283,7 @@ func TestRequeueDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 先 fail
+	// 先fail
 	failure := core.ExecutionFailure{
 		Token: claim.Token,
 		Failure: domain.Failure{
@@ -300,7 +300,7 @@ func TestRequeueDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// delivery 应该是 pending，execution id 不变
+	// delivery应该是pending，execution id不变
 	delivery, err := session.LoadDelivery(ctx, key)
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +313,7 @@ func TestRequeueDelivery(t *testing.T) {
 			delivery.ExecutionID, claim.Token.ExecutionID)
 	}
 
-	// attempt 历史应该还在
+	// attempt历史应该还在
 	stored, err := session.LoadExecution(ctx, claim.Token.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestRequeueDelivery(t *testing.T) {
 		t.Fatalf("attempt count mismatch: %d", len(stored.Attempts))
 	}
 
-	// 再领取，应该新增 attempt 2，沿用 execution id
+	// 再领取，应该新增attempt 2，沿用execution id
 	claim2, err := session.ClaimExecution(ctx, key)
 	if err != nil {
 		t.Fatal(err)
@@ -376,7 +376,7 @@ func TestCommitExecutionStaleToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. attempt id 被改
+	// 1. attempt id被改
 	badToken := claim.Token
 	badToken.AttemptID = domain.ID("fake-attempt")
 	_, err = session.CommitExecution(ctx, core.ExecutionCommit{
@@ -387,7 +387,7 @@ func TestCommitExecutionStaleToken(t *testing.T) {
 		t.Fatalf("expected error for fake attempt id")
 	}
 
-	// 2. expected state version 被改
+	// 2. expected state version被改
 	badToken = claim.Token
 	badToken.ExpectedStateVersion = claim.Token.ExpectedStateVersion + 100
 	_, err = session.CommitExecution(ctx, core.ExecutionCommit{
@@ -398,7 +398,7 @@ func TestCommitExecutionStaleToken(t *testing.T) {
 		t.Fatalf("expected error for wrong version")
 	}
 
-	// 确认 agent state 没变
+	// 确认agent state没变
 	loaded, err := session.LoadAgent(ctx, agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +408,7 @@ func TestCommitExecutionStaleToken(t *testing.T) {
 			loaded.StateVersion, agent.StateVersion)
 	}
 
-	// 3. 正常 commit
+	// 3. 正常commit
 	if _, err := session.CommitExecution(ctx, core.ExecutionCommit{
 		Token:       claim.Token,
 		StateUpdate: map[string]any{"count": 1},
@@ -416,7 +416,7 @@ func TestCommitExecutionStaleToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 4. 再用同一个 token，应该失败
+	// 4. 再用同一个token，应该失败
 	_, err = session.CommitExecution(ctx, core.ExecutionCommit{
 		Token:       claim.Token,
 		StateUpdate: map[string]any{"count": 2},
@@ -425,7 +425,7 @@ func TestCommitExecutionStaleToken(t *testing.T) {
 		t.Fatalf("expected error on reuse of token")
 	}
 
-	// 确认 state 还是 count=1，版本只加了一次
+	// 确认state还是count=1，版本只加了一次
 	loaded, err = session.LoadAgent(ctx, agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -457,7 +457,7 @@ func TestClaimExecutionConcurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 两条不同 event，同 agent
+	// 两条不同event，同agent
 	for i := 0; i < 2; i++ {
 		event := domain.Event{
 			ID:      domain.ID(fmt.Sprintf("event-%d", i)),
@@ -575,7 +575,7 @@ func TestExecutionRetryCommit(t *testing.T) {
 		t.Fatalf("result count mismatch: %v", result.StateUpdate["count"])
 	}
 
-	// 确认 agent state 更新
+	// 确认agent state更新
 	loaded, err := session.LoadAgent(ctx, agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -585,7 +585,7 @@ func TestExecutionRetryCommit(t *testing.T) {
 			loaded.StateVersion, agent.StateVersion+1)
 	}
 
-	// 确认 attempt 历史有 2 条
+	// 确认attempt历史有2条
 	stored, err := session.LoadExecution(ctx, claim1.Token.ExecutionID)
 	if err != nil {
 		t.Fatal(err)

@@ -131,7 +131,7 @@ func TestReceiveEventDuplicate(t *testing.T) {
 	}
 	firstExecutionID := first.Delivery.ExecutionID
 
-	// 再次投递同一 event
+	// 再次投递同一event
 	second, err := session.ReceiveEvent(ctx, agent.ID, event)
 	if err != nil {
 		t.Fatal(err)
