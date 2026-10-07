@@ -85,7 +85,7 @@ func (handler *Handler) Execute(action domain.Action) (map[string]any, error) {
 
 func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("模型请求被取消: %w", err)
+		return nil, fmt.Errorf("模型请求已取消: %w", err)
 	}
 	messages, err := actionMessages(action.Payload["messages"])
 	if err != nil {
@@ -113,7 +113,7 @@ func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action
 	response, err := handler.client.Do(request)
 	if err != nil {
 		if cancellation := ctx.Err(); cancellation != nil {
-			return nil, fmt.Errorf("模型请求被取消: %w", cancellation)
+			return nil, fmt.Errorf("模型请求已取消: %w", cancellation)
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, errors.New("模型请求超时")
@@ -122,12 +122,12 @@ func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("模型请求失败，http状态码%d", response.StatusCode)
+		return nil, fmt.Errorf("模型请求失败，http %d", response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
 		if cancellation := ctx.Err(); cancellation != nil {
-			return nil, fmt.Errorf("模型回复读取被取消: %w", cancellation)
+			return nil, fmt.Errorf("读取模型回复已取消: %w", cancellation)
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, errors.New("模型回复读取超时")
@@ -135,10 +135,10 @@ func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action
 		return nil, errors.New("模型回复读取失败")
 	}
 	if len(data) > maxResponseBytes {
-		return nil, errors.New("模型回复响应超过1MiB")
+		return nil, errors.New("模型回复超过1MiB")
 	}
 	if !utf8.Valid(data) {
-		return nil, errors.New("模型回复包含非法utf-8编码")
+		return nil, errors.New("模型回复须为有效utf-8文本")
 	}
 	var result struct {
 		Choices []struct {
@@ -149,7 +149,7 @@ func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, errors.New("模型回复不是有效的chat completions响应")
+		return nil, errors.New("模型回复格式无效")
 	}
 	if len(result.Choices) > 0 && len(result.Choices[0].Message.ToolCalls) > 0 {
 		choice := result.Choices[0].Message
@@ -169,12 +169,12 @@ func (handler *Handler) ExecuteContext(ctx context.Context, action domain.Action
 	}
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil ||
 		strings.TrimSpace(*result.Choices[0].Message.Content) == "" {
-		return nil, errors.New("模型回复缺少文本内容")
+		return nil, errors.New("模型回复为空")
 	}
 	content := *result.Choices[0].Message.Content
 	encoded, err := json.Marshal(content)
 	if err != nil || len(encoded) > maxMessageBytes {
-		return nil, errors.New("模型回复文本超过256KiB")
+		return nil, errors.New("模型回复文本编码后超过256KiB")
 	}
 	return map[string]any{"message": content}, nil
 }

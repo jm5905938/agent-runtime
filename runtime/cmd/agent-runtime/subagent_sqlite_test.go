@@ -357,7 +357,7 @@ func TestTUISessionSubagentReadinessAndUnknownResolution(t *testing.T) {
 				view := newTUIModel(session, query, directory)
 				view.treeReady, view.unknown = ready, unknown
 				if interrupted {
-					if !strings.Contains(view.View(), "模型调用结果未知") || session.run(context.Background(), true, "") == nil {
+					if !strings.Contains(view.View(), "调用结果未知") || session.run(context.Background(), true, "") == nil {
 						t.Fatal("终端界面没有提示child未知调用或未经决定就继续")
 					}
 					return session.run(context.Background(), true, core.ResolutionRetry)
@@ -491,7 +491,7 @@ func TestCancelledUnknownActionOnlyOffersAbandon(t *testing.T) {
 		t.Fatalf("取消任务允许重试或没有给出放弃选择: %s %s %t %v", &output, decision, exit, err)
 	}
 	view := newTUIModel(nil, query, "项目")
-	if view.resume(core.ResolutionRetry) != nil || !strings.Contains(view.notice, "只能放弃") {
+	if view.resume(core.ResolutionRetry) != nil || !strings.Contains(view.notice, "请放弃未知结果") {
 		t.Fatal("终端界面允许重试已经取消的任务")
 	}
 }

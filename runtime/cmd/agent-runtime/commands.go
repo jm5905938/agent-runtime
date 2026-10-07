@@ -35,10 +35,6 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	return runCommandWithStorage(ctx, args, stdout, stderr, openCommandBackend, openCommandIngress)
 }
 
-func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io.Writer, open backendOpener) int {
-	return runCommandWithStorage(ctx, args, stdout, stderr, open, nil)
-}
-
 func runCommandWithStorage(ctx context.Context, args []string, stdout, stderr io.Writer, open backendOpener, input inputOpener) int {
 	return runCommandWithInput(ctx, args, os.Stdin, stdout, stderr, open, input)
 }
@@ -218,7 +214,7 @@ func bindPersistent(ctx context.Context, runtime *core.Runtime, options commandO
 	}
 	if err := runtime.Executor().RegisterWithOptions(
 		readFileActionType,
-		readFileHandler{rootDir: options.python.SourceDir},
+		readFileHandler{rootDir: defaultReadFileRoot()},
 		core.HandlerOptions{
 			Version:        "1",
 			RecoveryPolicy: domain.RecoveryPolicySafeRetry,
@@ -269,7 +265,7 @@ type persistentPythonRunner struct {
 
 func (runner *persistentPythonRunner) PrepareModel(ctx context.Context) error {
 	if runner.prepareModel == nil {
-		return errors.New("对话绑定没有模型配置入口")
+		return errors.New("模型配置不可用")
 	}
 	return runner.prepareModel(ctx)
 }
@@ -278,7 +274,7 @@ func (runner *persistentPythonRunner) Run(input core.ExecutionContext) (core.Exe
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
 	if runner.Runner == nil {
-		return core.ExecutionResult{}, errors.New("python runner尚未配置")
+		return core.ExecutionResult{}, errors.New("python runner未配置")
 	}
 	return runner.Runner.Run(input)
 }
@@ -287,7 +283,7 @@ func (runner *persistentPythonRunner) RunContext(ctx context.Context, input core
 	runner.mu.RLock()
 	defer runner.mu.RUnlock()
 	if runner.Runner == nil {
-		return core.ExecutionResult{}, errors.New("python runner尚未配置")
+		return core.ExecutionResult{}, errors.New("python runner未配置")
 	}
 	return runner.Runner.RunContext(ctx, input)
 }
@@ -342,8 +338,8 @@ func parseCommand(args []string) (commandOptions, error) {
 	flags.StringVar(&eventID, "event-id", "", "event id")
 	flags.StringVar(&actionID, "action", "", "结果未知的model.generate action id")
 	flags.StringVar(&taskID, "task", "", "subagent任务id")
-	flags.BoolVar(&retryAction, "retry", false, "人工确认重试结果未知的模型调用")
-	flags.BoolVar(&abandonAction, "abandon", false, "放弃结果未知的模型调用所在轮次")
+	flags.BoolVar(&retryAction, "retry", false, "重试结果未知的模型调用")
+	flags.BoolVar(&abandonAction, "abandon", false, "放弃结果未知的当前轮次")
 	flags.StringVar(&options.request.Reason, "reason", "", "人工处理原因")
 	parse := func(args []string) error {
 		if err := flags.Parse(args); err != nil {
@@ -372,7 +368,7 @@ func parseCommand(args []string) (commandOptions, error) {
 		}
 	}
 	if options.python.Timeout <= 0 {
-		return options, &cli.UsageError{Message: "超时时间必须大于零"}
+		return options, &cli.UsageError{Message: "超时时间须大于0"}
 	}
 	if !utf8.ValidString(options.request.Message) {
 		return options, &cli.UsageError{Message: "message必须是有效UTF-8文本"}
@@ -414,7 +410,7 @@ func parseCommand(args []string) (commandOptions, error) {
 			options.dataDir = defaultDataDir()
 		}
 		if strings.TrimSpace(options.dataDir) == "" {
-			return options, &cli.UsageError{Message: "命令需要--data-dir指定数据目录"}
+			return options, &cli.UsageError{Message: "请用--data-dir指定数据目录"}
 		}
 		if !utf8.ValidString(options.dataDir) {
 			return options, &cli.UsageError{Message: "data-dir必须是有效UTF-8文本"}
@@ -439,18 +435,18 @@ func parseCommand(args []string) (commandOptions, error) {
 	options.request.ActionID = domain.ID(actionID)
 	options.taskID = domain.ID(taskID)
 	if options.request.Command == "cancel" && (!seen["task"] || !utf8.ValidString(taskID) || strings.TrimSpace(taskID) == "" || len(taskID) > 1024) {
-		return options, &cli.UsageError{Message: "cancel需要有效的--task任务id，且不超过1024字节"}
+		return options, &cli.UsageError{Message: "--task须为有效任务id，最多1024字节"}
 	}
 	if options.request.Command == "resolve" || options.request.Command == "resume" {
 		if options.request.Command == "resume" && !seen["retry"] && !seen["abandon"] {
 			if seen["reason"] {
-				return options, &cli.UsageError{Message: "resume的--reason需要同时指定--retry或--abandon"}
+				return options, &cli.UsageError{Message: "--reason需配合--retry或--abandon"}
 			}
 			if options.asJSON {
 				return options, &cli.UsageError{Message: "resume使用--json时需要--retry或--abandon"}
 			}
 		} else if seen["retry"] == seen["abandon"] || !retryAction && !abandonAction {
-			return options, &cli.UsageError{Message: options.request.Command + "需要恰好一个--retry或--abandon，且值必须为true"}
+			return options, &cli.UsageError{Message: options.request.Command + "仅选一个--retry或--abandon，值须为true"}
 		}
 		if retryAction {
 			options.request.Decision = core.ResolutionRetry
@@ -481,10 +477,10 @@ func parseCommand(args []string) (commandOptions, error) {
 		}
 		if options.request.Command == "chat" || options.request.Command == "resume" || options.request.Command == "tui" || options.request.Command == "cancel" {
 			if !utf8.ValidString(agentID) || seen["agent"] && strings.TrimSpace(agentID) == "" {
-				return options, &cli.UsageError{Message: "agent必须是非空白的有效UTF-8文本"}
+				return options, &cli.UsageError{Message: "agent须为非空的有效UTF-8文本"}
 			}
 			if options.request.Command == "resume" && options.request.Decision != "" && (!utf8.ValidString(options.request.Reason) || strings.TrimSpace(options.request.Reason) == "" || utf8.RuneCountInString(options.request.Reason) > 1024) {
-				return options, &cli.UsageError{Message: "resume的reason必须为非空白的有效UTF-8文本，且不超过1024个字符"}
+				return options, &cli.UsageError{Message: "reason须为非空的有效UTF-8文本，最多1024字符"}
 			}
 		} else {
 			if err := options.request.Validate(); err != nil {
@@ -563,10 +559,10 @@ const commandHelp = `日常用法:
   agent-runtime tui                          进入终端界面，显示历史、工具状态和输入队列
   agent-runtime chat                         进入持久对话，首次自动创建main agent
   agent-runtime status                       查看当前main agent状态
-  agent-runtime resume                       选择重试或放弃卡住的模型调用并继续执行
+  agent-runtime resume                       处理未知调用并继续执行
 
   chat     [--message <文本>] [--agent <id>] [--env-file <文件>]
-                                              不传message时交互对话；传入时处理一条输入
+                                              不传message则交互对话，传入则处理一条输入
   tui      [--agent <id>] [--env-file <文件>]   Enter发送，Alt+Enter换行，Esc停止，Ctrl+C退出
   status   [--agent <id>]                     指定agent时显示完整记录
   resume   [--agent <id>] [--retry|--abandon] [--reason <原因>]
@@ -582,11 +578,11 @@ const commandHelp = `日常用法:
   retry    --agent <id> --event-id <id>         重新排队失败的delivery，不执行
   resolve  --action <id> --retry [--reason <原因>]
            --action <id> --abandon --reason <原因>
-                                              保存人工处理决定，随后使用run继续处理
+                                              保存处理决定，用run继续
 
 公共参数可放在命令前后:
   --data-dir <目录>       tui、chat、status、resume和cancel默认使用当前项目的.agent-runtime目录
-                         其它持久命令必填；数据保存到store.db
+                         其他持久命令必填，数据保存到store.db
   --json                 成功结果写stdout，结构化错误写stderr
                          chat需同时传入--message，resume需指定--retry或--abandon
   --python <路径>        python可执行文件，默认python3，需要3.12+
@@ -595,13 +591,13 @@ const commandHelp = `日常用法:
   --env-file <文件>      tui、chat、resume或run的模型配置文件，默认项目根目录的.env
   --help                 显示帮助
 
-chat退出后再次启动会恢复同一个main agent和历史；输入/exit或/quit退出
-chat遇到结果未知的模型调用会提示选择重试或放弃；resume可在重新启动后处理
+chat会恢复main agent和历史，/exit或/quit退出
+调用结果未知时需选择重试或放弃，重启后可用resume处理
 显式传入status --data-dir且不指定agent时，保留agent列表查询
 submit只持久化输入，可在run执行期间提交
-持久命令启动时恢复中断记录；status不会运行agent或action
-模型调用结果未知时不会自动重试；人工重试保留旧记录，可能重复产生模型费用
-模型请求期限由LLM_TIMEOUT配置，默认60s；没有待执行模型工作时不需要模型配置
+持久命令启动时恢复中断记录，status仅查询
+模型调用结果未知时需手动处理，重试保留旧记录
+LLM_TIMEOUT设置模型请求期限，默认60s，无待执行模型工作时无需配置
 无子命令时运行一次内存echo，默认消息hello，进程退出后数据丢失
 退出码: 0命令正常结束，1操作或存储错误，2参数错误
 `

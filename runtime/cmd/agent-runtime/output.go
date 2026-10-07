@@ -32,12 +32,12 @@ func writeCommandResult(output io.Writer, result cli.Result) error {
 			receipt.Delivery.Key.AgentID, receipt.Delivery.Key.EventID, receipt.Delivery.Status, receipt.Duplicate)
 		switch receipt.Delivery.Status {
 		case domain.DeliveryStatusFailed:
-			fmt.Fprintln(&text, "人工处理决定执行失败，先使用retry重新排队，再使用run继续处理")
+			fmt.Fprintln(&text, "决定处理失败，先用retry重排，再用run继续")
 			fmt.Fprintf(&text, "retry --agent %s --event-id %s\n", receipt.Delivery.Key.AgentID, receipt.Delivery.Key.EventID)
 		case domain.DeliveryStatusCompleted:
-			fmt.Fprintln(&text, "人工处理决定已处理，可使用run推进剩余工作")
+			fmt.Fprintln(&text, "决定已处理，用run继续")
 		default:
-			fmt.Fprintln(&text, "人工处理决定已保存，使用run继续处理")
+			fmt.Fprintln(&text, "决定已保存，用run继续")
 		}
 	case "status":
 		if result.Query != nil {

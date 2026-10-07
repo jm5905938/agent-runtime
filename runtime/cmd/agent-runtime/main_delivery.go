@@ -30,11 +30,11 @@ func (runner mainAgentRunner) DeliveryBlockedBy(agent core.AgentSnapshot, event 
 		return nil
 	}
 	if agent.State["request_status"] == "waiting" {
-		return []core.BlockReason{{Code: core.BlockAgentWaiting, Message: "当前请求等待模型或工具结果，新输入保留在队列中"}}
+		return []core.BlockReason{{Code: core.BlockAgentWaiting, Message: "等待当前结果，新输入已排队"}}
 	}
 	for _, previous := range earlier {
 		if modelRequestEvent(agent, previous) {
-			return []core.BlockReason{{Code: core.BlockEarlierInput, Message: "较早的用户输入尚未处理，按接收顺序等待"}}
+			return []core.BlockReason{{Code: core.BlockEarlierInput, Message: "等待前面的输入处理完毕"}}
 		}
 	}
 	return nil

@@ -123,7 +123,7 @@ func TestParseFriendlyCommandsRejectInvalidOptions(t *testing.T) {
 }
 
 func TestCommandHelpExplainsDailyAndScriptCommands(t *testing.T) {
-	for _, expected := range []string{"agent-runtime chat", "agent-runtime status", "agent-runtime resume", "脚本和调试命令", "--message", "--retry|--abandon", "恢复同一个main agent和历史"} {
+	for _, expected := range []string{"agent-runtime chat", "agent-runtime status", "agent-runtime resume", "脚本和调试命令", "--message", "--retry|--abandon", "恢复main agent和历史"} {
 		if !strings.Contains(commandHelp, expected) {
 			t.Fatalf("帮助缺少日常工作说明%q", expected)
 		}

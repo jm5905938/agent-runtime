@@ -138,7 +138,7 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		query.setReadiness(result.Agent, running)
 		if query.Delivery.Status == domain.DeliveryStatusPending {
 			if cancelled {
-				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消已登记，停止新工作"})
+				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消中，已停止新工作"})
 			}
 			blocked, err := deliveryBlockedBy(runner, result.Agent, query.Event, earlier)
 			if err != nil {
@@ -184,7 +184,7 @@ func (r *Runtime) QueryAgentContext(ctx context.Context, agentID domain.ID) (Age
 		r.setActionReadiness(&query, result.Agent)
 		if query.Ready {
 			if cancelled {
-				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消已登记，停止新工作"})
+				query.BlockedBy = append(query.BlockedBy, BlockReason{Code: BlockSubagentCancelling, Message: "subagent取消中，已停止新工作"})
 			}
 			handler, err := r.executor.handlerFor(query.Action)
 			if err != nil {
@@ -254,10 +254,10 @@ func (q *DeliveryQuery) setReadiness(agent AgentSnapshot, running bool) {
 			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockDefinitionUnavailable, agent.BindingError})
 		}
 		if running {
-			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockExecutionRunning, "同一agent已有execution进行中"})
+			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockExecutionRunning, "当前agent已有execution执行中"})
 		}
 		if q.Execution != nil && q.Execution.AttemptCount == math.MaxUint64 {
-			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "execution尝试次数已耗尽"})
+			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "execution已达尝试上限"})
 		}
 		q.Ready = len(q.BlockedBy) == 0
 	}
@@ -265,7 +265,7 @@ func (q *DeliveryQuery) setReadiness(agent AgentSnapshot, running bool) {
 
 func (r *Runtime) setActionReadiness(q *ActionQuery, agent AgentSnapshot) {
 	if q.Resolution != nil {
-		q.BlockedBy = append(q.BlockedBy, BlockReason{BlockActionResolved, "已登记人工处理决定，原调用保留unknown记录"})
+		q.BlockedBy = append(q.BlockedBy, BlockReason{BlockActionResolved, "已保存处理决定，原调用结果仍未知"})
 		return
 	}
 	switch q.Action.Status {
@@ -281,13 +281,13 @@ func (r *Runtime) setActionReadiness(q *ActionQuery, agent AgentSnapshot) {
 		}
 		if q.Action.Status == domain.ActionStatusUnknown {
 			if q.Action.RecoveryPolicy != domain.RecoveryPolicySafeRetry {
-				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockManualUnknown, "action结果未知，保存的恢复策略要求人工处理"})
+				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockManualUnknown, "action结果未知，需手动处理"})
 			} else if r.session == nil {
-				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockRecoveryRequired, "当前runtime没有恢复会话，不会自动重试unknown action"})
+				q.BlockedBy = append(q.BlockedBy, BlockReason{BlockRecoveryRequired, "无恢复会话，无法自动重试未知action"})
 			}
 		}
 		if q.Action.AttemptCount >= q.Action.MaxAttempts {
-			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "action已达到保存的尝试上限"})
+			q.BlockedBy = append(q.BlockedBy, BlockReason{BlockAttemptsExhausted, "action已达尝试上限"})
 		}
 		q.Ready = len(q.BlockedBy) == 0
 	}

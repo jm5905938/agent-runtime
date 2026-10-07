@@ -13,11 +13,23 @@ import (
 
 func TestChatCommandCompletesFileAndClockToolsWithRealPython(t *testing.T) {
 	pythonArgs := chatTestPython(t)
-	source := t.TempDir()
+	project := t.TempDir()
+	source := filepath.Join(project, "python", "src")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.CopyFS(source, os.DirFS(pythonArgs[3])); err != nil {
 		t.Fatal(err)
 	}
 	pythonArgs[3] = source
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("项目读取验证"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runtimeDir := filepath.Join(project, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(runtimeDir)
 	var captured mainToolsModelCapture
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		request := mainToolsReadRequest(t, r)
@@ -27,13 +39,15 @@ func TestChatCommandCompletesFileAndClockToolsWithRealPython(t *testing.T) {
 			var calls []map[string]any
 			for _, tool := range []struct{ name, arguments string }{
 				{"write_file", `{"path":"result.txt","content":"合并验证"}`},
-				{"read_file", `{"path":"result.txt"}`},
+				{"read_file", `{"path":"python/src/result.txt"}`},
 				{"get_current_time", `{}`},
 				{"get_current_date", `{}`},
 			} {
 				calls = append(calls, map[string]any{"id": tool.name, "type": "function",
 					"function": map[string]any{"name": tool.name, "arguments": tool.arguments}})
 			}
+			calls = append(calls, map[string]any{"id": "read-project", "type": "function",
+				"function": map[string]any{"name": "read_file", "arguments": `{"path":"README.md"}`}})
 			mainToolsReply(t, w, "", calls...)
 		case 2:
 			mainToolsReply(t, w, "工具执行完成")
@@ -50,11 +64,11 @@ func TestChatCommandCompletesFileAndClockToolsWithRealPython(t *testing.T) {
 		t.Fatalf("工具闭环失败: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var result chatResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Status != "succeeded" || result.Actions != 6 {
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Status != "succeeded" || result.Actions != 7 {
 		t.Fatalf("工具闭环结果错误: %+v %v", result, err)
 	}
 	requests := captured.all()
-	if len(requests) != 2 || len(requests[1].Messages) != 6 {
+	if len(requests) != 2 || len(requests[1].Messages) != 7 {
 		t.Fatalf("工具轨迹不完整: %+v", requests)
 	}
 	messages := requests[1].Messages
@@ -69,6 +83,9 @@ func TestChatCommandCompletesFileAndClockToolsWithRealPython(t *testing.T) {
 	}
 	if output := mainToolsOutput(t, messages[5], "get_current_date"); output["date"] == nil {
 		t.Fatalf("日期工具结果错误: %+v", output)
+	}
+	if output := mainToolsOutput(t, messages[6], "read-project"); output["content"] != "项目读取验证" || output["path"] != "README.md" {
+		t.Fatalf("项目读取工具结果错误: %+v", output)
 	}
 	content, err := os.ReadFile(filepath.Join(source, "result.txt"))
 	if err != nil || string(content) != "合并验证" {

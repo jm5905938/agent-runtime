@@ -30,7 +30,7 @@ def _valid_name(name: object) -> bool:
 
 def validate_tool_calls(value: object) -> list[JSONObject]:
     if not isinstance(value, list) or not 1 <= len(value) <= MAX_TOOL_CALLS:
-        raise ValueError("工具调用数量需要在1到8之间")
+        raise ValueError("每次可调用1至8个工具")
     if json_size(value) > MAX_TOOL_CALL_BYTES:
         raise ValueError("工具调用超过32KiB")
     seen = set()
@@ -77,10 +77,10 @@ def _arguments(value: str) -> JSONObject:
             parse_constant=invalid_constant,
         )
         if not isinstance(arguments, dict):
-            raise ValueError("工具参数需要JSON对象")
+            raise ValueError("工具参数须为JSON对象")
         validate_json(arguments)
     except (ValueError, RecursionError) as error:
-        raise ValueError("工具参数需要有效JSON对象") from error
+        raise ValueError("工具参数须为有效JSON对象") from error
     return arguments
 
 
@@ -95,7 +95,7 @@ class Tool:
 
     def __post_init__(self) -> None:
         if not _valid_name(self.name):
-            raise ValueError("工具名称需要1至64个字母、数字、下划线或连字符")
+            raise ValueError("工具名限1至64个字母、数字、下划线或连字符")
         if not isinstance(self.description, str):
             raise ValueError("工具description需要字符串")
         if not isinstance(self.parameters, dict) or self.parameters.get("type") != "object":

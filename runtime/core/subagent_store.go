@@ -6,7 +6,7 @@ import (
 	"errors"
 )
 
-var ErrSubagentBusy = errors.New("subagent仍有未确认的在途操作")
+var ErrSubagentBusy = errors.New("subagent仍有待确认的操作")
 
 type SubagentSpawn struct {
 	Token ActionToken

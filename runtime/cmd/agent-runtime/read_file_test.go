@@ -9,6 +9,73 @@ import (
 	"agent-runtime/domain"
 )
 
+func TestDefaultReadFileRoot(t *testing.T) {
+	project := t.TempDir()
+	source := filepath.Join(project, "python", "src", "agent_runtime")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "worker.py"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{project, filepath.Join(project, "runtime")} {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(filepath.Base(directory), func(t *testing.T) {
+			t.Chdir(directory)
+			if got := defaultReadFileRoot(); got != project {
+				t.Fatalf("项目读取根目录错误: got=%q want=%q", got, project)
+			}
+		})
+	}
+	t.Run("installed_binary", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		if got := defaultReadFileRoot(); got != "." {
+			t.Fatalf("独立目录读取根目录错误: %q", got)
+		}
+	})
+}
+
+func TestReadFileHandlerReadsWholeProject(t *testing.T) {
+	root := t.TempDir()
+	handler := readFileHandler{rootDir: root}
+	for _, path := range []string{"README.md", "runtime/main.go", "docs/guide.md", "python/src/agent_runtime/main.py"} {
+		file := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(path), 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := handler.Execute(domain.NewAction(readFileActionType, map[string]any{"path": path}))
+		if err != nil || result["path"] != path || result["content"] != path {
+			t.Fatalf("项目文件读取错误: path=%q result=%v err=%v", path, result, err)
+		}
+	}
+}
+
+func TestReadFileHandlerRejectsProjectEscapes(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "project")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside.txt")
+	if err := os.WriteFile(outside, []byte("项目外文件"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "outside-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	handler := readFileHandler{rootDir: root}
+	for _, path := range []string{"../outside.txt", "outside-link.txt", outside} {
+		if _, err := handler.Execute(domain.NewAction(readFileActionType, map[string]any{"path": path})); err == nil {
+			t.Fatalf("项目外路径未被拒绝: %q", path)
+		}
+	}
+}
+
 func TestReadFileHandlerReturnsUTF8Content(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "README.md")
@@ -55,7 +122,7 @@ func TestReadFileHandlerRejectsUnsafePaths(t *testing.T) {
 			"path": "missing.txt",
 		}),
 	)
-	if err == nil || !strings.Contains(err.Error(), "读取失败") {
+	if err == nil || !strings.Contains(err.Error(), "读取文件失败") {
 		t.Fatalf("不存在文件错误不正确: %v", err)
 	}
 }

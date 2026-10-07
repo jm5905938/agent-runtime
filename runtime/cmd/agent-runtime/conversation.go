@@ -107,7 +107,7 @@ func retryConversationDelivery(ctx context.Context, runtime *core.Runtime, agent
 		candidate.Ready = true
 		if waitingResultMatches(query.Agent, candidate) || waitingResolutionMatches(query.Agent, candidate) {
 			if delivery.Event.Type == core.ActionResolutionEventType && decision != "" && delivery.Event.Payload["decision"] != string(decision) {
-				return fmt.Errorf("当前调用已登记其他决定，使用resume继续原决定: %w", core.ErrStoreConflict)
+				return fmt.Errorf("已有处理决定，请用resume继续: %w", core.ErrStoreConflict)
 			}
 			index = i
 			break
@@ -177,7 +177,7 @@ func sendConversationMessage(ctx context.Context, options commandOptions, open b
 				continue
 			}
 			if turn.status == "failed" {
-				return &conversationTurnError{message: fmt.Sprintf("MainAgent请求失败: %s", turn.failure)}
+				return &conversationTurnError{message: fmt.Sprintf("请求失败: %s", turn.failure)}
 			}
 			result.Status, result.Result, result.Queued = turn.status, turn.reply, false
 			return nil
@@ -189,7 +189,7 @@ func sendConversationMessage(ctx context.Context, options commandOptions, open b
 		result.WaitingActionID = domain.ID(waiting)
 		for _, delivery := range query.Deliveries {
 			if delivery.Event.ID == request.ID && delivery.Delivery.Status == domain.DeliveryStatusFailed {
-				return &conversationTurnError{message: fmt.Sprintf("MainAgent输入处理失败: %s", delivery.Execution.Error)}
+				return &conversationTurnError{message: fmt.Sprintf("处理输入失败: %s", delivery.Execution.Error)}
 			}
 		}
 		return nil
@@ -212,7 +212,7 @@ func resolveConversation(ctx context.Context, options commandOptions, open backe
 			allowed = allowed || id == action.Action.AgentID
 		}
 		if !allowed {
-			return fmt.Errorf("action不属于当前main及其subagent: %w", core.ErrStoreConflict)
+			return fmt.Errorf("action不可用: %w", core.ErrStoreConflict)
 		}
 		before, err := runtime.QueryAgentContext(ctx, action.Action.AgentID)
 		if err != nil {
@@ -242,12 +242,12 @@ func resolveConversation(ctx context.Context, options commandOptions, open backe
 
 func writeConversationStatus(output io.Writer, query core.AgentQuery) error {
 	status, _ := query.Agent.State["request_status"].(string)
-	label := map[string]string{"": "空闲", "idle": "空闲", "succeeded": "已完成", "failed": "本轮失败", "waiting": "等待结果"}[status]
+	label := map[string]string{"": "空闲", "idle": "空闲", "succeeded": "已完成", "failed": "失败", "waiting": "等待结果"}[status]
 	if label == "" {
 		label = status
 	}
 	if waitingUnknownConversationAction(query) != nil {
-		label = "调用结果未知，需要选择重试或放弃"
+		label = "调用结果未知，请重试或放弃"
 	}
 	queued := 0
 	for _, delivery := range query.Deliveries {
@@ -255,13 +255,13 @@ func writeConversationStatus(output io.Writer, query core.AgentQuery) error {
 			queued++
 		}
 	}
-	if _, err := fmt.Fprintf(output, "MainAgent：%s\n状态：%s\n排队输入：%d\n", query.Agent.Name, label, queued); err != nil {
+	if _, err := fmt.Fprintf(output, "MainAgent：%s\n状态：%s\n排队：%d\n", query.Agent.Name, label, queued); err != nil {
 		return err
 	}
 	for _, task := range query.Tasks {
 		status := "执行中"
 		if task.CancelRequested {
-			status = "等待取消收尾"
+			status = "取消中"
 		}
 		if task.Result != nil {
 			status = string(task.Result.Status)
@@ -323,9 +323,9 @@ func (input *conversationInput) line(ctx context.Context) (string, error) {
 
 func chooseConversationResolution(ctx context.Context, input *conversationInput, output io.Writer, abandonOnly bool) (core.ResolutionDecision, bool, error) {
 	for {
-		prompt := "调用结果未知，请选择：1重试（可能再次计费），2放弃本轮，3暂不处理\n选择> "
+		prompt := "调用结果未知：1重试，2放弃本轮，3稍后处理\n选择> "
 		if abandonOnly {
-			prompt = "任务已取消，调用结果未知，请选择：2放弃未确认的结果，3暂不处理\n选择> "
+			prompt = "任务已取消，结果未知：2放弃未知结果，3稍后处理\n选择> "
 		}
 		if _, err := fmt.Fprint(output, prompt); err != nil {
 			return "", false, err
@@ -340,7 +340,7 @@ func chooseConversationResolution(ctx context.Context, input *conversationInput,
 		switch strings.TrimSpace(line) {
 		case "1", "retry", "重试":
 			if abandonOnly {
-				if _, err := fmt.Fprintln(output, "任务已取消，只能放弃未确认的结果或暂不处理"); err != nil {
+				if _, err := fmt.Fprintln(output, "任务已取消，请放弃未知结果或稍后处理"); err != nil {
 					return "", false, err
 				}
 				continue
@@ -353,7 +353,7 @@ func chooseConversationResolution(ctx context.Context, input *conversationInput,
 		case "/exit", "/quit":
 			return "", true, nil
 		}
-		hint := "请输入1、2或3。"
+		hint := "请输入1、2或3"
 		if abandonOnly {
 			hint = "请输入2或3"
 		}
@@ -390,7 +390,7 @@ func runConversationCommand(ctx context.Context, options commandOptions, stdin i
 			return json.NewEncoder(output).Encode(result)
 		}
 		if result.Status != "succeeded" {
-			_, err = fmt.Fprintln(output, "输入已保存，等待当前调用恢复。运行agent-runtime resume继续。")
+			_, err = fmt.Fprintln(output, "输入已保存，运行agent-runtime resume继续")
 		} else {
 			_, err = fmt.Fprintln(output, result.Result)
 		}
@@ -447,7 +447,7 @@ func runConversationLoop(ctx context.Context, options commandOptions, input *con
 		return err
 	}
 	if options.request.Command == "chat" {
-		if _, err := fmt.Fprintln(output, "持久对话已就绪。/status查看状态，/resume处理未知调用，/exit退出。"); err != nil {
+		if _, err := fmt.Fprintln(output, "对话已就绪，/status查看状态，/resume继续，/exit退出"); err != nil {
 			return err
 		}
 	}
@@ -540,7 +540,7 @@ func runConversationLoop(ctx context.Context, options commandOptions, input *con
 						finished = finished || !displayed[turn.eventID]
 					}
 					if !finished {
-						_, err = fmt.Fprintln(output, failed.Error()+"；输入已保存，可使用/resume继续。")
+						_, err = fmt.Fprintln(output, failed.Error()+"，输入已保存，/resume继续")
 					}
 				}
 			}

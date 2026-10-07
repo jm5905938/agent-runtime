@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-var ErrBackendUnavailable = errors.New("当前未配置可用的恢复后端")
+var ErrBackendUnavailable = errors.New("恢复后端未配置")
 
 type UsageError struct {
 	Message string
@@ -294,7 +294,7 @@ func (request Request) Validate() error {
 			return invalid("resolve的decision仅支持retry或abandon")
 		}
 		if strings.TrimSpace(request.Reason) == "" || utf8.RuneCountInString(request.Reason) > 1024 {
-			return invalid("resolve的reason必须为非空白文本，且不超过1024个字符")
+			return invalid("reason须为非空文本，最多1024字符")
 		}
 	default:
 		return invalid(fmt.Sprintf("未知命令%q", request.Command))

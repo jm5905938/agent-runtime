@@ -77,7 +77,7 @@ func (s *tuiSession) run(ctx context.Context, resume bool, decision core.Resolut
 		}
 		if unknown != nil {
 			if decision == "" {
-				return errors.New("模型调用结果未知，请选择重试或放弃")
+				return errors.New("调用结果未知，请重试或放弃")
 			}
 			if decision == core.ResolutionRetry {
 				if err := s.prepare(ctx); err != nil {
@@ -130,7 +130,7 @@ func runTUI(ctx context.Context, options commandOptions, stdin io.Reader, stdout
 	input, inputOK := stdin.(interface{ Fd() uintptr })
 	output, outputOK := stdout.(interface{ Fd() uintptr })
 	if !inputOK || !outputOK || !term.IsTerminal(input.Fd()) || !term.IsTerminal(output.Fd()) {
-		return errors.New("tui需要交互终端；脚本请使用chat --message或--json")
+		return errors.New("tui需要交互终端，脚本请用chat --message或--json")
 	}
 	return withConversation(ctx, options, open, true, func(runtime *core.Runtime, agent core.AgentSnapshot, prepare func(context.Context) error) error {
 		session := newTUISession(ctx, runtime, agent.ID, prepare)

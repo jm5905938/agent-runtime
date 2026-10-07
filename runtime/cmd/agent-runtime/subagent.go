@@ -24,11 +24,11 @@ func runCancelCommand(ctx context.Context, options commandOptions, output io.Wri
 			Task    *domain.SubagentTask `json:"task"`
 		}{"cancel", task})
 	}
-	status := "已登记取消请求，等待在途操作确认"
+	status := "已请求取消，等待当前操作确认"
 	if task.Result != nil {
 		status = "已结束，状态=" + string(task.Result.Status)
 		if task.Result.Status == domain.SubagentStatusCancelled {
-			status = "已取消，使用resume或run继续处理main"
+			status = "已取消，用resume或run继续main"
 		}
 	}
 	_, err := fmt.Fprintf(output, "subagent任务%s%s\n", options.taskID, status)

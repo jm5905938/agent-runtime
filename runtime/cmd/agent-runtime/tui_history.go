@@ -59,12 +59,12 @@ func tuiTranscript(query core.AgentQuery, width int, expanded bool) string {
 		}
 	}
 	if len(rows) == 0 {
-		return tuiAccent.Bold(true).Render("开始一个新的对话") + "\n\n" + tuiWrap("输入任务后按 Enter。执行期间可以继续补充消息，输入会按顺序处理。\n\n历史自动保存，重新打开后继续。输入 /help 查看命令。", width)
+		return tuiAccent.Bold(true).Render("开始对话") + "\n\n" + tuiWrap("输入任务，按Enter发送，执行中可继续补充消息\n\n历史自动保存，输入/help查看命令", width)
 	}
 	for _, task := range query.Tasks {
 		status := "执行中"
 		if task.CancelRequested {
-			status = "等待取消收尾"
+			status = "取消中"
 		}
 		if task.Result != nil {
 			status = string(task.Result.Status)

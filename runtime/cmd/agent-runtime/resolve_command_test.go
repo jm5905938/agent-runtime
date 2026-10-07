@@ -97,7 +97,7 @@ func TestWriteResolveCommandResult(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, expected := range []string{"action: model-action", "decision: " + string(decision), "reason: 原因", "event: decision-event", "delivery: pending", "duplicate: true", "使用run继续处理"} {
+		for _, expected := range []string{"action: model-action", "decision: " + string(decision), "reason: 原因", "event: decision-event", "delivery: pending", "duplicate: true", "用run继续"} {
 			if !strings.Contains(output.String(), expected) {
 				t.Fatalf("人工处理结果缺少%q: %s", expected, output.String())
 			}
@@ -111,9 +111,9 @@ func TestWriteResolveCommandResultUsesDeliveryStatus(t *testing.T) {
 			status domain.DeliveryStatus
 			want   []string
 		}{
-			{domain.DeliveryStatusPending, []string{"人工处理决定已保存，使用run继续处理"}},
-			{domain.DeliveryStatusFailed, []string{"先使用retry重新排队", "再使用run继续处理", "retry --agent agent --event-id decision-event"}},
-			{domain.DeliveryStatusCompleted, []string{"人工处理决定已处理", "可使用run推进剩余工作"}},
+			{domain.DeliveryStatusPending, []string{"决定已保存，用run继续"}},
+			{domain.DeliveryStatusFailed, []string{"先用retry重排", "再用run继续", "retry --agent agent --event-id decision-event"}},
+			{domain.DeliveryStatusCompleted, []string{"决定已处理", "用run继续"}},
 		} {
 			t.Run(string(decision)+"_"+string(scenario.status), func(t *testing.T) {
 				var output bytes.Buffer
@@ -130,7 +130,7 @@ func TestWriteResolveCommandResultUsesDeliveryStatus(t *testing.T) {
 						t.Fatalf("人工处理结果缺少%q: %s", expected, output.String())
 					}
 				}
-				if scenario.status != domain.DeliveryStatusPending && strings.Contains(output.String(), "人工处理决定已保存，使用run继续处理") {
+				if scenario.status != domain.DeliveryStatusPending && strings.Contains(output.String(), "决定已保存，用run继续") {
 					t.Fatalf("终态回执沿用了pending提示: %s", output.String())
 				}
 			})

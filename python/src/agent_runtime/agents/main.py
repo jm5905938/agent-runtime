@@ -197,13 +197,13 @@ class MainAgent:
         self, context: ExecutionContext, state: JSONObject, history: list[JSONObject]
     ) -> ExecutionResult:
         if state["request_status"] == "waiting":
-            raise BusinessError("main agent正忙")
+            raise BusinessError("main正忙，请稍后再试")
         payload = context.event.payload
         if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
-            raise BusinessError("main.request需要字符串消息")
+            raise BusinessError("消息须为文本")
         message = payload["message"]
         if _json_size(message) > MAX_MESSAGE_BYTES:
-            raise BusinessError("main.request消息超过64KiB")
+            raise BusinessError("消息超过64KiB")
         update = initial_state()
         update.update(
             messages=_trim_history(history),
@@ -215,7 +215,7 @@ class MainAgent:
 
     def _model_action(self, context: ExecutionContext, update: JSONObject) -> ExecutionResult:
         if _json_size(update["pending_messages"]) > MAX_PENDING_BYTES:
-            return self._finish(context, update, error="本轮工具调用轨迹超过128KiB")
+            return self._finish(context, update, error="本轮工具记录超过128KiB")
         builder = self._prompt_builder(context)
         try:
             messages = builder.build(_turns(update["messages"]), update["pending_messages"])
@@ -242,7 +242,7 @@ class MainAgent:
     ) -> ExecutionResult:
         payload = context.event.payload
         if state["request_status"] != "waiting":
-            raise BusinessError("main没有等待中的操作")
+            raise BusinessError("main没有待处理操作")
         action_type = state.get("waiting_action_type") or "model.generate"
         execution_id = state.get("waiting_execution_id") or state["request_execution_id"]
         is_tool = self.tools.supports(action_type)
@@ -255,17 +255,17 @@ class MainAgent:
             raise BusinessError("action.resolution与main等待中的操作不匹配")
         decision = payload.get("decision")
         if decision not in ("retry", "abandon"):
-            raise BusinessError("action.resolution需要retry或abandon决定")
+            raise BusinessError("请选择retry或abandon")
         reason = payload.get("reason")
         if not isinstance(reason, str) or not reason.strip():
-            raise BusinessError("action.resolution需要非空原因")
+            raise BusinessError("请填写处理原因")
         update = _continue_state(state, history, legacy)
         if decision == "abandon":
-            return self._finish(context, update, error="用户放弃本轮: " + reason)
+            return self._finish(context, update, error="本轮已放弃: " + reason)
         retry_payload = payload.get("retry_payload")
         if is_tool:
             if not isinstance(retry_payload, dict):
-                raise BusinessError("重试工具调用需要已保存的payload对象")
+                raise BusinessError("重试所需工具参数缺失或无效")
             retry = Action(id=str(uuid4()), type=action_type, payload=deepcopy(retry_payload))
             update.update(
                 waiting_action_id=retry.id,
@@ -279,7 +279,7 @@ class MainAgent:
         retry_payload = payload.get("retry_payload")
         messages = retry_payload.get("messages") if isinstance(retry_payload, dict) else None
         if not isinstance(messages, list) or not messages:
-            raise BusinessError("重试模型操作需要已保存的非空messages列表")
+            raise BusinessError("重试所需消息缺失或无效")
         for message in messages:
             if not isinstance(message, dict) or message.get("role") not in (
                 "system", "developer", "user", "assistant", "tool"
@@ -289,7 +289,7 @@ class MainAgent:
                 and message.get("content") is None
                 and "tool_calls" in message
             ):
-                raise BusinessError("重试模型操作的消息格式无效")
+                raise BusinessError("重试消息格式无效")
         action = Action(
             id=str(uuid4()), type="model.generate",
             payload=deepcopy(retry_payload) | {"retry_of": state["waiting_action_id"]},
@@ -312,7 +312,7 @@ class MainAgent:
     ) -> ExecutionResult:
         payload = context.event.payload
         if state["request_status"] != "waiting":
-            raise BusinessError("main没有等待中的操作")
+            raise BusinessError("main没有待处理操作")
         action_type = state.get("waiting_action_type") or "model.generate"
         execution_id = state.get("waiting_execution_id") or state["request_execution_id"]
         if not isinstance(payload, dict) or (
@@ -323,11 +323,11 @@ class MainAgent:
             raise BusinessError("action.result与main等待中的操作不匹配")
         status = payload.get("status")
         if status not in ("succeeded", "failed"):
-            raise BusinessError("模型操作缺少最终结果")
+            raise BusinessError("模型调用缺少最终结果")
         if status == "failed" and (
             not isinstance(payload.get("error"), str) or not payload["error"]
         ):
-            raise BusinessError("失败的模型结果需要错误消息")
+            raise BusinessError("模型调用失败但缺少错误信息")
         update = _continue_state(state, history, legacy)
         if self.tools.supports(action_type):
             call = update["pending_tool_calls"].pop(0)
@@ -336,7 +336,7 @@ class MainAgent:
             else:
                 tool_result = payload.get("result")
                 if not isinstance(tool_result, dict):
-                    raise BusinessError("工具结果需要JSON对象")
+                    raise BusinessError("工具结果须为JSON对象")
                 if _json_size(tool_result) > MAX_TOOL_RESULT_BYTES:
                     tool_result = {"error": "工具结果超过8KiB"}
             update["pending_messages"].append(_tool_message(call, tool_result))
@@ -345,13 +345,13 @@ class MainAgent:
             return self._finish(context, update, error=payload["error"])
         result = payload.get("result")
         if not isinstance(result, dict):
-            raise BusinessError("模型结果需要字符串消息")
+            raise BusinessError("模型回复须为文本")
         calls = result.get("tool_calls")
         if calls:
             if not isinstance(result.get("message", ""), str):
-                raise BusinessError("模型结果需要字符串消息")
+                raise BusinessError("模型回复须为文本")
             if legacy:
-                return self._finish(context, update, error="旧请求缺少工具调用所需的输入消息")
+                return self._finish(context, update, error="旧请求缺少工具调用所需消息")
             if update["tool_rounds"] >= MAX_TOOL_ROUNDS:
                 return self._finish(context, update, error="工具调用超过4轮")
             try:
@@ -369,13 +369,13 @@ class MainAgent:
         if "tool_calls" in result and calls not in (None, []):
             return self._finish(context, update, error="工具调用格式无效")
         if not isinstance(result.get("message"), str):
-            raise BusinessError("模型结果需要字符串消息")
+            raise BusinessError("模型回复须为文本")
         return self._finish(context, update, result=result["message"])
 
     def _next_tool(self, context: ExecutionContext, update: JSONObject) -> ExecutionResult:
         while update["pending_tool_calls"]:
             if _json_size(update["pending_messages"]) > MAX_PENDING_BYTES:
-                return self._finish(context, update, error="本轮工具调用轨迹超过128KiB")
+                return self._finish(context, update, error="本轮工具记录超过128KiB")
             call = update["pending_tool_calls"][0]
             try:
                 action = self.tools.create_action(call, context)

@@ -65,7 +65,7 @@ func (h subagentHandler) ActionBlockedBy(ctx context.Context, action domain.Acti
 	}
 	message := "等待subagent任务完成"
 	if task.CancelRequested {
-		message = "subagent取消已登记，等待在途操作确认"
+		message = "subagent取消中，等待当前操作确认"
 	}
 	return []BlockReason{{Code: BlockSubagentWaiting, Message: message}}, nil
 }
@@ -95,7 +95,7 @@ func (h subagentHandler) ExecuteClaim(ctx context.Context, claim ActionClaim) (m
 		}
 		message, ok := action.Payload["message"].(string)
 		if !ok || strings.TrimSpace(message) == "" || len(message) > 64*1024 {
-			return nil, fmt.Errorf("subagent任务需要64KiB以内的非空message")
+			return nil, fmt.Errorf("message须为非空文本，最多64KiB")
 		}
 		for key, value := range action.Payload {
 			if key != "message" && key != "context" && key != "name" {
@@ -107,7 +107,7 @@ func (h subagentHandler) ExecuteClaim(ctx context.Context, claim ActionClaim) (m
 		}
 		contextText, _ := action.Payload["context"].(string)
 		if len(contextText)+len(message) > 64*1024 {
-			return nil, fmt.Errorf("subagent任务与上下文超过64KiB")
+			return nil, fmt.Errorf("任务和上下文超过64KiB")
 		}
 		ref := domain.DefinitionRef{ID: "subagent", Version: "1"}
 		h.runtime.mu.Lock()

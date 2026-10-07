@@ -75,13 +75,13 @@ class PromptBuilder:
     ) -> list[JSONObject]:
         """history_turns已按时间排序且每项是一轮完整对话；本轮整体保留。"""
         if not current_messages:
-            raise ValueError("prompt需要本轮消息")
+            raise ValueError("本轮消息不能为空")
         prefix = [{"role": "system", "content": self.system_prompt}] if self.system_prompt else []
         fixed = prefix + current_messages
         if prompt_chars(fixed) > self.max_chars:
-            raise PromptTooLong("system与本轮消息超过LLM_MAX_PROMPT_CHARS限制")
+            raise PromptTooLong("系统提示和本轮消息超过LLM_MAX_PROMPT_CHARS")
         if json_size(fixed) > MAX_PROMPT_BYTES:
-            raise PromptTooLong("system与本轮消息超过384KiB模型输入限制")
+            raise PromptTooLong("系统提示和本轮消息超过384KiB")
         for first in range(len(history_turns) + 1):
             history = [message for turn in history_turns[first:] for message in turn]
             messages = prefix + history + current_messages

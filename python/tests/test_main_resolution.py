@@ -154,7 +154,7 @@ class MainResolutionTests(unittest.TestCase):
         final = state | output.state_update
         self.assertEqual(final["messages"], history)
         self.assertEqual(final["request_status"], "failed")
-        self.assertEqual(final["error"], "用户放弃本轮: 服务状态无法确认")
+        self.assertEqual(final["error"], "本轮已放弃: 服务状态无法确认")
         self.assertEqual(final["result_event_id"], context.event.id)
         self.assertEqual(final["request_event_id"], state["request_event_id"])
         self.assertEqual(final["request_execution_id"], state["request_execution_id"])

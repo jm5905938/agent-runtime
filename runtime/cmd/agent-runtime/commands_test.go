@@ -16,6 +16,10 @@ import (
 	"testing"
 )
 
+func runCommandWithBackend(ctx context.Context, args []string, stdout, stderr io.Writer, open backendOpener) int {
+	return runCommandWithStorage(ctx, args, stdout, stderr, open, nil)
+}
+
 func TestPersistentCommandsRejectMissingBackendOpener(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "not-created")
 	for _, command := range [][]string{

@@ -70,7 +70,7 @@ func validatePromptConfig(config Config) error {
 	}
 	encoded, err := json.Marshal(config.SystemPrompt)
 	if err != nil || len(encoded) > maxSystemPromptBytes {
-		return errors.New("LLM_SYSTEM_PROMPT的JSON编码不能超过64KiB")
+		return errors.New("LLM_SYSTEM_PROMPT编码后超过64KiB")
 	}
 	if config.MaxPromptChars < 0 {
 		return errors.New("LLM_MAX_PROMPT_CHARS必须是正整数")

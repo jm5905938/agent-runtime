@@ -13,7 +13,7 @@ type getCurrentDateHandler struct{}
 
 func (getCurrentDateHandler) Execute(action domain.Action) (map[string]any, error) {
 	if len(action.Payload) != 0 {
-		return nil, errors.New("get_current_date不接受参数")
+		return nil, errors.New("查询日期无需参数")
 	}
 
 	return map[string]any{

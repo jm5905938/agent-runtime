@@ -36,7 +36,7 @@ func openCommandBackend(ctx context.Context, dataDir string) (backendHandle, err
 		return backendHandle{}, err
 	}
 	if strings.TrimSpace(dataDir) == "" {
-		return backendHandle{}, &cli.UsageError{Message: "命令需要--data-dir指定数据目录"}
+		return backendHandle{}, &cli.UsageError{Message: "请用--data-dir指定数据目录"}
 	}
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return backendHandle{}, fmt.Errorf("创建数据目录: %w", err)

@@ -46,7 +46,7 @@ func TestWriteFileHandlerRejectsExistingFile(t *testing.T) {
 			"content": "new",
 		}),
 	)
-	if err == nil || !strings.Contains(err.Error(), "创建失败") {
+	if err == nil || !strings.Contains(err.Error(), "创建文件失败") {
 		t.Fatalf("已有文件未被拒绝: %v", err)
 	}
 }

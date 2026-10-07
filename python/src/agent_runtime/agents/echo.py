@@ -43,7 +43,7 @@ class EchoAgent:
         self, context: ExecutionContext, state: JSONObject
     ) -> ExecutionResult:
         if state["request_status"] == "waiting":
-            raise BusinessError("echo agent正忙")
+            raise BusinessError("echo正忙，请稍后再试")
         payload = context.event.payload
         if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
             raise BusinessError("echo.request需要字符串消息")
@@ -64,7 +64,7 @@ class EchoAgent:
     ) -> ExecutionResult:
         payload = context.event.payload
         if state["request_status"] != "waiting":
-            raise BusinessError("echo没有等待中的操作")
+            raise BusinessError("echo没有待处理操作")
         if not isinstance(payload, dict) or (
             payload.get("action_id") != state["waiting_action_id"]
             or payload.get("execution_id") != state["request_execution_id"]

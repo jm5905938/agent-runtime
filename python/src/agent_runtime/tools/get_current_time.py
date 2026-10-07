@@ -6,7 +6,7 @@ from ..tool import Tool
 
 def _prepare(arguments: JSONObject, context: ExecutionContext) -> JSONObject:
     if arguments:
-        raise ValueError("get_current_time不接受参数")
+        raise ValueError("查询时间无需参数")
     return {}
 
 

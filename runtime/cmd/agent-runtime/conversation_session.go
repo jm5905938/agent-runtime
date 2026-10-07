@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var errNoMainAgent = errors.New("尚未创建MainAgent，运行chat即可开始对话")
+var errNoMainAgent = errors.New("尚无main，运行chat开始对话")
 
 func defaultDataDir() string {
 	if source := defaultPythonSource(); source != "" {
@@ -60,7 +60,7 @@ func withConversation(ctx context.Context, options commandOptions, open backendO
 	}
 	preparer, ok := cleanup.Binding.(interface{ PrepareModel(context.Context) error })
 	if !ok {
-		return errors.New("对话绑定不支持模型配置")
+		return errors.New("模型配置不可用")
 	}
 	if options.request.Command == "chat" || options.request.Command == "resume" {
 		needed, err := modelWorkPendingForTree(ctx, runtime, agent.ID)
@@ -81,10 +81,10 @@ func selectConversationAgent(ctx context.Context, runtime *core.Runtime, id doma
 	if id != "" {
 		agent, err := runtime.AgentContext(ctx, id)
 		if err != nil {
-			return core.AgentSnapshot{}, fmt.Errorf("选择MainAgent: %w", err)
+			return core.AgentSnapshot{}, fmt.Errorf("选择main: %w", err)
 		}
 		if agent.Definition != mainDefinition || agent.Status != domain.AgentStatusActive {
-			return core.AgentSnapshot{}, &cli.UsageError{Message: fmt.Sprintf("--agent需要指定active状态的main@1，当前%s为%s@%s(%s)", id, agent.Definition.ID, agent.Definition.Version, agent.Status)}
+			return core.AgentSnapshot{}, &cli.UsageError{Message: fmt.Sprintf("--agent须为active的main@1，当前%s为%s@%s(%s)", id, agent.Definition.ID, agent.Definition.Version, agent.Status)}
 		}
 		return agent, nil
 	}
@@ -117,6 +117,6 @@ func selectConversationAgent(ctx context.Context, runtime *core.Runtime, id doma
 		for i, candidate := range candidates {
 			names[i] = fmt.Sprintf("%s(%s)", candidate.Name, candidate.ID)
 		}
-		return core.AgentSnapshot{}, &cli.UsageError{Message: "存在多个MainAgent：" + strings.Join(names, "、") + "；请使用--agent指定"}
+		return core.AgentSnapshot{}, &cli.UsageError{Message: "存在多个main：" + strings.Join(names, "、") + "，请用--agent指定"}
 	}
 }

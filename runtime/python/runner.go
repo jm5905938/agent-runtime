@@ -80,7 +80,7 @@ func NewRunner(options Options) (*Runner, error) {
 		options.Python = "python3"
 	}
 	if options.Timeout < 0 {
-		return nil, fmt.Errorf("python runner超时时间必须大于零")
+		return nil, fmt.Errorf("python runner超时时间须大于0")
 	}
 	if options.Timeout == 0 {
 		options.Timeout = DefaultTimeout
@@ -108,7 +108,7 @@ func NewRunner(options Options) (*Runner, error) {
 			return nil, fmt.Errorf("检查python源码目录失败: %w", err)
 		}
 		if !info.IsDir() {
-			return nil, fmt.Errorf("python源码路径必须是目录")
+			return nil, fmt.Errorf("python源码路径须为目录")
 		}
 		options.SourceDir = path
 	}

@@ -488,7 +488,7 @@ func TestMainResolutionSQLiteCommandsAcrossProcesses(t *testing.T) {
 		}
 		abandoned, _ := p.call(t, directory, 0, "status", "--agent", agentID)
 		state := abandoned.Query.Agent.State
-		if state["request_status"] != "failed" || state["error"] != "用户放弃本轮: 这轮不再需要" || state["result"] != nil ||
+		if state["request_status"] != "failed" || state["error"] != "本轮已放弃: 这轮不再需要" || state["result"] != nil ||
 			state["waiting_action_id"] != nil || state["waiting_execution_id"] != nil || state["pending_message"] != nil ||
 			len(captured.all()) != 1 || len(abandoned.Query.Actions) != 2 {
 			t.Fatalf("放弃没有清理当前轮或误发出模型请求: %+v", abandoned.Query)
@@ -543,7 +543,7 @@ func TestMainResolutionSQLiteCommandsAcrossProcesses(t *testing.T) {
 		resolved, _ := p.call(t, directory, 0, "resolve", "--action", string(old.ActionID), "--abandon", "--reason", "手动结束")
 		p.call(t, directory, 0, "run", "--env-file", filepath.Join(t.TempDir(), "missing.env"))
 		after, _ := p.call(t, directory, 0, "status", "--agent", agentID)
-		if after.Query.Agent.State["request_status"] != "failed" || after.Query.Agent.State["error"] != "用户放弃本轮: 手动结束" ||
+		if after.Query.Agent.State["request_status"] != "failed" || after.Query.Agent.State["error"] != "本轮已放弃: 手动结束" ||
 			after.Query.Agent.State["waiting_action_id"] != nil || len(after.Query.Actions) != 1 || len(after.Query.Deliveries) != 2 {
 			t.Fatalf("无模型配置不能独立处理放弃决定: %+v", after.Query)
 		}

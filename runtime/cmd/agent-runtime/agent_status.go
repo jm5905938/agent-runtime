@@ -27,10 +27,10 @@ func registerAgentStatus(ctx context.Context, runtime *core.Runtime) error {
 func (handler agentStatusHandler) Execute(action domain.Action) (map[string]any, error) {
 	id, ok := action.Payload["agent_id"].(string)
 	if !ok || len(action.Payload) != 1 || strings.TrimSpace(id) == "" || !utf8.ValidString(id) || len(id) > 1024 {
-		return nil, errors.New("agent_status需要有效的agent_id字符串")
+		return nil, errors.New("agent_id无效")
 	}
 	if handler.runtime == nil {
-		return nil, errors.New("agent_status未绑定runtime")
+		return nil, errors.New("状态查询不可用")
 	}
 	ctx := handler.ctx
 	if ctx == nil {
@@ -38,7 +38,7 @@ func (handler agentStatusHandler) Execute(action domain.Action) (map[string]any,
 	}
 	snapshot, err := handler.runtime.AgentContext(ctx, domain.ID(id))
 	if err != nil {
-		return nil, fmt.Errorf("agent_status查询失败: %w", err)
+		return nil, fmt.Errorf("查询agent状态失败: %w", err)
 	}
 	result := map[string]any{
 		"id": agentStatusText(string(snapshot.ID)), "name": agentStatusText(snapshot.Name),
@@ -53,7 +53,7 @@ func (handler agentStatusHandler) Execute(action domain.Action) (map[string]any,
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 8*1024 {
-		return nil, errors.New("agent_status结果超过8KiB")
+		return nil, errors.New("状态结果超过8KiB")
 	}
 	return result, nil
 }

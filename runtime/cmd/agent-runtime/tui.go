@@ -62,7 +62,7 @@ var tuiWarning = lipgloss.NewStyle().Foreground(lipgloss.Color("215"))
 
 func newTUIModel(session *tuiSession, query core.AgentQuery, directory string) *tuiModel {
 	input := textarea.New()
-	input.Placeholder = "输入消息，或 /help 查看命令"
+	input.Placeholder = "输入消息，/help查看命令"
 	input.Prompt = "› "
 	input.ShowLineNumbers = false
 	input.CharLimit = 0
@@ -155,7 +155,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.quitting = false
 			// 保留原event，重试保存不会生成第二条输入。
-			m.notice = "保存输入失败：" + msg.err.Error() + "；/send重试"
+			m.notice = "保存输入失败：" + msg.err.Error() + "，/send重试"
 			m.refreshHistory()
 			return m, m.snapshot()
 		}
@@ -168,7 +168,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running, m.cancel = false, nil
 		m.epoch++
 		if errors.Is(msg.err, context.Canceled) {
-			m.notice = "已停止；/resume 继续，未知的模型调用需要先处理"
+			m.notice = "已停止，/resume继续，结果未知时需先确认"
 		}
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.notice, m.paused = msg.err.Error(), true
@@ -183,7 +183,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.running {
 				m.paused = true
 				m.cancel()
-				m.notice = "正在停止；已保存的输入会保留"
+				m.notice = "正在停止，已保存的输入会保留"
 			} else {
 				m.deferred = true
 			}
@@ -233,11 +233,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) resume(decision core.ResolutionDecision) tea.Cmd {
 	if m.running || m.posting {
-		m.notice = "请等待当前操作结束"
+		m.notice = "请等待当前操作完成"
 		return nil
 	}
 	if decision == core.ResolutionRetry && cancelledUnknownAction(m.query, m.waitingUnknown()) {
-		m.notice = "任务已取消，只能放弃未确认的结果"
+		m.notice = "任务已取消，请放弃未知结果"
 		return nil
 	}
 	if m.waitingUnknown() != nil && decision == "" {
@@ -269,7 +269,7 @@ func (m *tuiModel) command(value string) (tea.Cmd, bool) {
 		m.refreshHistory()
 		m.history.GotoBottom()
 	default:
-		m.notice = "未知命令，输入 /help 查看帮助"
+		m.notice = "未知命令，/help查看帮助"
 		return nil, false
 	}
 	return nil, true
@@ -283,7 +283,7 @@ func (m *tuiModel) quit() tea.Cmd {
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.notice = "保存输入后退出；再次按 Ctrl+C 立即退出"
+	m.notice = "保存后退出，再按Ctrl+C立即退出"
 	return m.post()
 }
 
@@ -309,7 +309,7 @@ func (m *tuiModel) refreshHistory() {
 		}
 	}
 	if m.help {
-		content += "\n\n" + tuiWrap("命令与快捷键\n/resume 继续执行\n/retry 或 Alt+R 重试未知调用，可能重复计费\n/abandon 或 Alt+A 放弃当前未知调用\n/later 或 Esc 稍后处理\n/send 重试保存失败的输入\n/status 刷新状态\n/exit 或 Ctrl+C 退出\nCtrl+T 展开工具详情\nPgUp/PgDn 滚动历史，Ctrl+Home/End 跳到首尾\n/help 关闭帮助", m.history.Width)
+		content += "\n\n" + tuiWrap("命令与快捷键\n/resume 继续执行\n/retry 或 Alt+R 重试未知调用\n/abandon 或 Alt+A 放弃未知调用\n/later 或 Esc 稍后处理\n/send 重试保存失败的输入\n/status 刷新状态\n/exit 或 Ctrl+C 退出\nCtrl+T 展开工具详情\nPgUp/PgDn 滚动历史，Ctrl+Home/End 跳到首尾\n/help 关闭帮助", m.history.Width)
 	}
 	m.history.SetContent(content)
 	if bottom {
@@ -319,7 +319,7 @@ func (m *tuiModel) refreshHistory() {
 
 func (m *tuiModel) View() string {
 	if m.width < 32 || m.height < 14 {
-		return ansi.Truncate("请扩大终端窗口（至少32列、14行）", max(1, m.width), "…")
+		return ansi.Truncate("窗口至少需要32列、14行", max(1, m.width), "…")
 	}
 	w := max(1, m.width-4)
 	line := tuiMuted.Render(strings.Repeat("─", w))
@@ -334,7 +334,7 @@ func (m *tuiModel) View() string {
 			status += " · 等待模型回复"
 		}
 	} else if m.waitingUnknown() != nil {
-		status = "模型调用结果未知 · 等待你的决定"
+		status = "调用结果未知 · 请重试或放弃"
 	} else if m.paused {
 		status = "已暂停 · /resume 继续"
 	}
@@ -350,9 +350,9 @@ func (m *tuiModel) View() string {
 	}
 	notice := tuiText(m.notice)
 	if m.waitingUnknown() != nil && !m.deferred && !m.running {
-		notice = "Alt+R 重试（可能重复计费） · Alt+A 放弃本轮 · Esc 稍后"
+		notice = "Alt+R 重试 · Alt+A 放弃本轮 · Esc 稍后"
 		if cancelledUnknownAction(m.query, m.waitingUnknown()) {
-			notice = "任务已取消 · Alt+A 放弃未确认的结果 · Esc 稍后"
+			notice = "任务已取消 · Alt+A 放弃未知结果 · Esc 稍后"
 		}
 	}
 	rows := []string{ansi.Truncate(strings.ReplaceAll(header, "\n", " "), w, "…"), line, m.history.View(), "", ansi.Truncate(status, w, "…"),
