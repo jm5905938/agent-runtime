@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -30,13 +31,16 @@ func subagentTestModel(t *testing.T, childCalls ...map[string]any) (*httptest.Se
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		request := mainToolsReadRequest(t, r)
 		captured.append(request)
-		if len(request.Tools) == 1 {
+		if len(request.Messages) > 0 && request.Messages[0]["role"] == "system" && strings.Contains(request.Messages[0]["content"].(string), "你是一次性subagent") {
+			if len(request.Tools) != 8 || !reflect.DeepEqual(request.Tools, captured.all()[0].Tools) {
+				t.Errorf("child未共用main工具: %+v", request.Tools)
+			}
 			children.Add(1)
 			encoded, _ := json.Marshal(request.Messages)
 			if strings.Contains(string(encoded), "parent-private-message") || !strings.Contains(string(encoded), "explicit-child-context") || !strings.Contains(string(encoded), "child-task") {
 				t.Errorf("child没有隔离父历史或丢失显式上下文: %s", encoded)
 			}
-			if len(childCalls) > 0 {
+			if len(childCalls) > 0 && request.Messages[len(request.Messages)-1]["role"] == "user" {
 				mainToolsReply(t, w, "", childCalls...)
 			} else {
 				mainToolsReply(t, w, "child-result")
@@ -84,6 +88,57 @@ func subagentCLIProcess(t *testing.T) sqliteCommandProcess {
 		t.Fatalf("构建subagent测试cli: %v\n%s", err, output)
 	}
 	return sqliteCommandProcess{binary: binary, python: pythonArgs[1], source: pythonArgs[3]}
+}
+
+func TestSubagentSQLiteSharedFileAndClockTools(t *testing.T) {
+	p := subagentCLIProcess(t)
+	project := t.TempDir()
+	source := filepath.Join(project, "python", "src")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(source, os.DirFS(p.source)); err != nil {
+		t.Fatal(err)
+	}
+	p.source = source
+	t.Chdir(project)
+	server, captured, _ := subagentTestModel(t,
+		subagentModelCall("write_file", "write-child", map[string]any{"path": "child-result.txt", "content": "child文件结果"}),
+		subagentModelCall("read_file", "read-child", map[string]any{"path": "python/src/child-result.txt"}),
+		subagentModelCall("get_current_time", "time-child", map[string]any{}),
+		subagentModelCall("get_current_date", "date-child", map[string]any{}),
+	)
+	defer server.Close()
+	config := chatTestConfig(t, server.URL)
+	directory := t.TempDir()
+	parent, _ := p.call(t, directory, 0, "init", "--definition", "main")
+	subagentCLIChat(t, p, directory, parent.Agent.ID, config)
+	subagentAssertFinished(t, p, directory, parent.Agent.ID, domain.SubagentStatusSucceeded)
+	content, err := os.ReadFile(filepath.Join(source, "child-result.txt"))
+	if err != nil || string(content) != "child文件结果" {
+		t.Fatalf("child文件未落盘: %q %v", content, err)
+	}
+	var messages []map[string]any
+	for _, request := range captured.all() {
+		if request.Messages[0]["role"] == "system" && strings.Contains(request.Messages[0]["content"].(string), "你是一次性subagent") {
+			messages = request.Messages
+		}
+	}
+	if len(messages) != 7 {
+		t.Fatalf("child工具轨迹不完整: %+v", messages)
+	}
+	if output := mainToolsOutput(t, messages[3], "write-child"); output["bytes"] != float64(len(content)) {
+		t.Fatalf("child写入结果错误: %+v", output)
+	}
+	if output := mainToolsOutput(t, messages[4], "read-child"); output["content"] != string(content) {
+		t.Fatalf("child读取结果错误: %+v", output)
+	}
+	if output := mainToolsOutput(t, messages[5], "time-child"); output["datetime"] == nil {
+		t.Fatalf("child时间结果错误: %+v", output)
+	}
+	if output := mainToolsOutput(t, messages[6], "date-child"); output["date"] == nil {
+		t.Fatalf("child日期结果错误: %+v", output)
+	}
 }
 
 func subagentCLIChat(t *testing.T, p sqliteCommandProcess, directory string, agentID domain.ID, config string) chatResult {

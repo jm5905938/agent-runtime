@@ -14,7 +14,3 @@ def default_tools() -> ToolRegistry:
         AGENT_STATUS, SPAWN_SUBAGENT, WAIT_SUBAGENT, CANCEL_SUBAGENT,
         GET_CURRENT_TIME, GET_CURRENT_DATE, READ_FILE, WRITE_FILE,
     ])
-
-
-def subagent_tools() -> ToolRegistry:
-    return ToolRegistry([AGENT_STATUS])

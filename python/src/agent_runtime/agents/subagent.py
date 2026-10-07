@@ -4,7 +4,6 @@ from dataclasses import replace
 
 from ..agent import BusinessError, ExecutionContext, ExecutionResult, JSONObject
 from ..prompt import PromptBuilder
-from ..tools import subagent_tools
 from .main import MainAgent
 
 
@@ -12,9 +11,6 @@ TASK_PROMPT = "你是一次性subagent，使用独立上下文完成收到的任
 
 
 class SubagentAgent(MainAgent):
-    def __init__(self, prompt_builder: PromptBuilder | None = None):
-        super().__init__(prompt_builder, subagent_tools())
-
     def run(self, context: ExecutionContext) -> ExecutionResult:
         if context.event.type == "subagent.request":
             state = context.agent.state

@@ -46,7 +46,7 @@ class SubagentTests(unittest.TestCase):
         }
         return self.agent.run(self.context(state, "action.result", payload | changes))
 
-    def test_independent_children_share_rules_without_parent_history_or_spawn_tools(self):
+    def test_independent_children_share_rules_and_main_tools_without_parent_history(self):
         first = self.request(payload={"message": "任务一", "context": "参考数据"})
         second = self.request(agent_id="child-2", payload={"message": "任务二"})
         self.assertEqual(first.state_update["messages"], [])
@@ -57,7 +57,8 @@ class SubagentTests(unittest.TestCase):
             {"role": "user", "content": "任务一\n\n任务上下文：\n参考数据"},
         ])
         self.assertEqual(second.actions[0].payload["messages"][-1]["content"], "任务二")
-        self.assertEqual([tool["function"]["name"] for tool in first.actions[0].payload["tools"]], ["agent_status"])
+        parent = MainAgent(PromptBuilder("共同规则"))
+        self.assertEqual(first.actions[0].payload["tools"], parent.tools.definitions())
         self.assertIsNone(first.task_result)
         first.state_update["pending_messages"][0]["content"] = "改变任务一"
         self.assertEqual(second.state_update["pending_messages"][0]["content"], "任务二")
@@ -105,18 +106,20 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual(failed.task_result["status"], "failed")
         self.assertEqual(failed.task_result["error"]["kind"], "business")
 
-    def test_child_cannot_dispatch_recursive_spawn(self):
+    def test_child_dispatches_spawn_and_returns_runtime_rejection_to_model(self):
         state = self.request().state_update
         call = {
             "id": "spawn", "type": "function",
             "function": {"name": "spawn_subagent", "arguments": '{"message":"递归任务"}'},
         }
-        continued = self.result(state, {"message": "", "tool_calls": [call]})
+        spawned = self.result(state, {"message": "", "tool_calls": [call]})
+        self.assertEqual([action.type for action in spawned.actions], ["tool.spawn_subagent"])
+        continued = self.result(spawned.state_update, status="failed", error="subagent不能递归委派")
         self.assertEqual([action.type for action in continued.actions], ["model.generate"])
         self.assertIsNone(continued.task_result)
         tool = continued.actions[0].payload["messages"][-1]
         self.assertEqual(tool["tool_call_id"], "spawn")
-        self.assertEqual(json.loads(tool["content"]), {"error": "不支持的工具: spawn_subagent"})
+        self.assertEqual(json.loads(tool["content"]), {"error": "subagent不能递归委派"})
 
     def test_child_rejects_second_task_shared_history_and_invalid_payload(self):
         waiting = self.request().state_update
