@@ -361,16 +361,23 @@ class MainToolTests(unittest.TestCase):
         self.assertIn("error", json.loads(output.actions[0].payload["messages"][-1]["content"]))
         self.assertLess(len(output.actions[0].payload["messages"][-1]["content"].encode("utf-8")), 1024)
 
-    def test_tool_round_limit_allows_four_batches_then_fails_fifth(self):
+    def test_tools_continue_beyond_four_batches_after_worker_restore(self):
         state, _ = self.request()
-        for number in range(4):
-            state, _ = self.tool_cycle(state, call_id=f"round-{number}")
+        for number in range(12):
+            state = json.loads(json.dumps(state))
+            self.agent = MainAgent(PromptBuilder())
+            state, output = self.call_tools(state, [tool_call(f"round-{number}")])
+            self.assertEqual(output.actions[0].type, "tool.agent_status")
             self.assertEqual(state["tool_rounds"], number + 1)
-        state, output = self.call_tools(state, [tool_call("fifth")])
-        self.assert_finished(state, "failed")
-        self.assertEqual(state["messages"], [])
+            state = json.loads(json.dumps(state))
+            self.agent = MainAgent(PromptBuilder())
+            state, output = self.reply(state, result={"status": "active"})
+            self.assertEqual(output.actions[0].type, "model.generate")
+        state, output = self.reply(state, result={"message": "已完成十二次查询"})
+        self.assert_finished(state)
         self.assertEqual(output.actions, [])
-        self.assertIn("4", state["error"])
+        self.assertEqual(len([message for message in state["messages"] if message["role"] == "tool"]), 12)
+        self.assertEqual(state["tool_rounds"], 0)
 
     def test_four_tool_batches_can_still_finish_with_final_text(self):
         state, _ = self.request()

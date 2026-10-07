@@ -94,6 +94,28 @@ class SubagentTests(unittest.TestCase):
         with self.assertRaisesRegex(BusinessError, "只接受一个任务"):
             self.request(done.state_update)
 
+    def test_child_continues_beyond_four_tool_batches(self):
+        state = self.request().state_update
+        for number in range(8):
+            call = {
+                "id": f"call-{number}", "type": "function",
+                "function": {"name": "agent_status", "arguments": "{}"},
+            }
+            tool = self.result(state, {"message": "", "tool_calls": [call]})
+            self.assertEqual(tool.actions[0].type, "tool.agent_status")
+            self.assertIsNone(tool.task_result)
+            state = json.loads(json.dumps(tool.state_update))
+            self.agent = SubagentAgent(PromptBuilder("共同规则"))
+            continued = self.result(state, {"status": "active"})
+            self.assertEqual(continued.actions[0].type, "model.generate")
+            self.assertIsNone(continued.task_result)
+            state = continued.state_update
+            self.assertEqual(state["tool_rounds"], number + 1)
+        done = self.result(state)
+        self.assertEqual(done.actions, [])
+        self.assertEqual(done.task_result, {"status": "succeeded", "output": {"message": "完整结果"}})
+        self.assertEqual(len([message for message in done.state_update["messages"] if message["role"] == "tool"]), 8)
+
     def test_model_failure_and_prompt_limit_emit_failed_task_result(self):
         state = self.request().state_update
         failed = self.result(state, status="failed", error="模型失败")

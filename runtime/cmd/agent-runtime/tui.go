@@ -54,6 +54,8 @@ type tuiModel struct {
 	notice    string
 	treeReady bool
 	unknown   *core.ActionQuery
+
+	visibleTasks map[domain.ID]bool
 }
 
 var tuiAccent = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
@@ -71,7 +73,10 @@ func newTUIModel(session *tuiSession, query core.AgentQuery, directory string) *
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(tuiAccent))
 	m := &tuiModel{session: session, query: query, input: input, history: viewport.New(76, 15),
-		spinner: spin, directory: directory, width: 80, height: 26}
+		spinner: spin, directory: directory, width: 80, height: 26, visibleTasks: make(map[domain.ID]bool)}
+	for _, task := range query.Tasks {
+		m.visibleTasks[task.ID] = task.Result == nil
+	}
 	m.resize()
 	m.refreshHistory()
 	return m
@@ -146,6 +151,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.query = msg.query
+		for _, task := range msg.query.Tasks {
+			if _, known := m.visibleTasks[task.ID]; !known || task.Result == nil {
+				m.visibleTasks[task.ID] = true
+			}
+		}
 		m.treeReady, m.unknown = msg.ready, msg.unknown
 		m.refreshHistory()
 		return m, m.start(false, "")
@@ -218,6 +228,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			m.outbox = append(m.outbox, domain.NewEvent("main.request", map[string]any{"message": value}))
+			for _, task := range m.query.Tasks {
+				if task.Result != nil {
+					m.visibleTasks[task.ID] = false
+				}
+			}
 			m.help = false
 			m.input.Reset()
 			m.history.GotoBottom()
@@ -297,7 +312,14 @@ func (m *tuiModel) resize() {
 
 func (m *tuiModel) refreshHistory() {
 	bottom := m.history.AtBottom()
-	content := tuiTranscript(m.query, m.history.Width, m.expanded)
+	query := m.query
+	query.Tasks = nil
+	for _, task := range m.query.Tasks {
+		if task.Result == nil || m.visibleTasks[task.ID] {
+			query.Tasks = append(query.Tasks, task)
+		}
+	}
+	content := tuiTranscript(query, m.history.Width, m.expanded)
 	saved := make(map[domain.ID]bool)
 	for _, delivery := range m.query.Deliveries {
 		saved[delivery.Event.ID] = true

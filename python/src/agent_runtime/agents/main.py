@@ -19,7 +19,6 @@ MAX_HISTORY_TURNS = 20
 MAX_HISTORY_BYTES = MAX_PROMPT_BYTES
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_PENDING_BYTES = 128 * 1024
-MAX_TOOL_ROUNDS = 4
 
 
 def initial_state() -> JSONObject:
@@ -173,7 +172,7 @@ class MainAgent:
             or not pending
             or not isinstance(queue, list)
             or type(rounds) is not int
-            or not 0 <= rounds <= MAX_TOOL_ROUNDS
+            or rounds < 0
         ):
             raise ValueError("main状态无效: pending_messages/tool_rounds")
         if queue:
@@ -352,8 +351,6 @@ class MainAgent:
                 raise BusinessError("模型回复须为文本")
             if legacy:
                 return self._finish(context, update, error="旧请求缺少工具调用所需消息")
-            if update["tool_rounds"] >= MAX_TOOL_ROUNDS:
-                return self._finish(context, update, error="工具调用超过4轮")
             try:
                 calls = _tool_calls(calls)
             except ValueError as error:

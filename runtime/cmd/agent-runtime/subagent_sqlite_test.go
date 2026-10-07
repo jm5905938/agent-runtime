@@ -197,6 +197,10 @@ func TestSubagentSQLiteChatAcrossProcessesAndScope(t *testing.T) {
 	before, _ := p.call(t, directory, 0, "status", "--agent", string(unrelated.Agent.ID))
 	subagentCLIChat(t, p, directory, main.Agent.ID, config)
 	query := subagentAssertFinished(t, p, directory, main.Agent.ID, domain.SubagentStatusSucceeded)
+	transcript := newTUIModel(nil, *query, directory).history.View()
+	if strings.Contains(transcript, "subagent任务") || !strings.Contains(transcript, "tool.spawn_subagent") || !strings.Contains(transcript, "tool.wait_subagent") || !strings.Contains(transcript, "main-result") {
+		t.Fatalf("重开后tui保留了已结束任务或丢失历史: %s", transcript)
+	}
 	if children.Load() != 1 || len(captured.all()) != 4 || query.Tasks[0].CompletionExecutionID == "" {
 		t.Fatalf("spawn、child、wait闭环调用次数或完成来源错误: children=%d model=%d task=%+v", children.Load(), len(captured.all()), query.Tasks[0])
 	}

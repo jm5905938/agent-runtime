@@ -67,7 +67,16 @@ func tuiTranscript(query core.AgentQuery, width int, expanded bool) string {
 			status = "取消中"
 		}
 		if task.Result != nil {
-			status = string(task.Result.Status)
+			switch task.Result.Status {
+			case domain.SubagentStatusSucceeded:
+				status = "完成"
+			case domain.SubagentStatusFailed:
+				status = "失败"
+			case domain.SubagentStatusCancelled:
+				status = "已取消"
+			default:
+				status = string(task.Result.Status)
+			}
 		}
 		rows = append(rows, tuiMuted.Render(tuiWrap(fmt.Sprintf("subagent任务%s · %s", task.ID, status), width)))
 	}
